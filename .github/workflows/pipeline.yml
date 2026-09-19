@@ -13,7 +13,6 @@ jobs:
   deploy-aws:
     name: Deploy Infra with Terraform
     runs-on: ubuntu-latest
-    needs: docker-build
     if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
     steps:
       - name: Checkout code
