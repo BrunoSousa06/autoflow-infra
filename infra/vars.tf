@@ -11,7 +11,7 @@ variable "cidr_vpc" {
 }
 
 variable "role_arn" {
-  default = "arn:aws:iam::724623091343:role/LabRole"
+  default = "arn:aws:iam::264066152659:role/LabRole"
 }
 variable "instance_type" {
   default = "t3.medium"
