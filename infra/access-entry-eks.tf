@@ -2,6 +2,10 @@ resource "aws_eks_access_entry" "access_entry" {
   cluster_name  = aws_eks_cluster.autoflow.name
   principal_arn = var.role_arn
   type          = "STANDARD"
+
+  depends_on = [
+    aws_eks_cluster.autoflow
+  ]
 }
 
 resource "aws_eks_access_policy_association" "labrole_admin" {
@@ -13,4 +17,8 @@ resource "aws_eks_access_policy_association" "labrole_admin" {
   access_scope {
     type = "cluster"
   }
+
+  depends_on = [
+    aws_eks_access_entry.access_entry
+  ]
 }
