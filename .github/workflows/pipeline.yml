@@ -2,17 +2,18 @@ name: Pipeline
 
 on:
   push:
-    branches: ["develop", "homolog", "main"]
+    branches: ["develop", "main"]
 
   pull_request:
     types: [opened, synchronize, reopened]
-    branches: ["homolog"]
+    branches: ["develop", "main"]
 
 jobs:
 
   deploy-aws:
     name: Deploy Infra with Terraform
     runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -29,7 +30,6 @@ jobs:
         uses: hashicorp/setup-terraform@v3
 
       - name: Validação de S3 Bucket
-        if: github.event_name == 'push' && github.ref == 'refs/heads/homolog'
         run: |
           if aws s3api head-bucket --bucket state-autoflow-terraform 2>/dev/null; then
             echo "Terraform state bucket already exists."
@@ -41,7 +41,6 @@ jobs:
           fi
 
       - name: Habilitar versionamento do S3
-        if: github.event_name == 'push' && github.ref == 'refs/heads/homolog'
         run: |
           aws s3api put-bucket-versioning \
             --bucket state-autoflow-terraform \
@@ -60,7 +59,26 @@ jobs:
         run: terraform plan
 
       - name: Terraform Apply
-        if: github.event_name == 'push' && github.ref == 'refs/heads/homolog'
         working-directory: ./infra
         run: terraform apply -auto-approve
+  
+  create-pr:
+    name: Create PR to main
+    needs: deploy-aws
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
 
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create Pull Request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create \
+            --base main \
+            --head develop \
+            --title "Criação de PR automatico para main" \
+            --body "Um Pull request automatico foi criado para a branch main após o deploy bem-sucedido do Terraform." \
+            || echo "PR ja existe e não sera criado."
