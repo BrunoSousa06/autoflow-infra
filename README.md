@@ -86,7 +86,7 @@ E verificado com:
 kubectl get nodes
 ```
 
-## 🔗 Integração
+## 🔗 Integração 
 
 Os outputs deste repositório podem ser utilizados por outros repositórios Terraform através de **Remote State**, permitindo compartilhar informações como:
 
