@@ -1,0 +1,98 @@
+deployment:
+  serviceAccount:
+    create: true
+    automountServiceAccountToken: false
+
+replicaCount: 2
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+image:
+  repository: kong
+  tag: "3.9.3"
+  unifiedRepoTag: "kong:3.9.3@sha256:92035d16d7ff86b7bc12fb1d0090d29357d924238b1880f78735f3f2fea6b631"
+  effectiveSemver: "3.9.3"
+  pullPolicy: IfNotPresent
+
+env:
+  database: "off"
+  router_flavor: traditional
+  nginx_worker_processes: "2"
+  proxy_access_log: "off"
+  admin_access_log: "off"
+  status_access_log: "off"
+
+plugins:
+  preInstalled: aws-lambda
+
+admin:
+  enabled: false
+  http:
+    enabled: false
+
+manager:
+  enabled: false
+
+portal:
+  enabled: false
+
+portalapi:
+  enabled: false
+
+enterprise:
+  enabled: false
+
+postgresql:
+  enabled: false
+
+proxy:
+  enabled: true
+  type: LoadBalancer
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+  http:
+    enabled: true
+    servicePort: 80
+    containerPort: 8000
+  tls:
+    enabled: true
+    servicePort: 443
+    containerPort: 8443
+
+ingressController:
+  enabled: true
+  env:
+    feature_gates: "RewriteURIs=true"
+  image:
+    repository: kong/kubernetes-ingress-controller
+    tag: "3.5.13"
+    unifiedRepoTag: "kong/kubernetes-ingress-controller:3.5.13@sha256:979f12864a13031545d58623d17af7a071b417396fbb3928a169d897b056b68f"
+    effectiveSemver: "3.5.13"
+  ingressClass: kong
+  createIngressClass: true
+  watchNamespaces:
+    - default
+    - kong
+  rbac:
+    create: true
+    enableClusterRoles: true
+    gatewayAPI:
+      enabled: false
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi

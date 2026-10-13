@@ -1,6 +1,6 @@
 resource "aws_eks_cluster" "autoflow" {
   name     = "eks-${var.project_name}"
-  role_arn = var.role_arn
+  role_arn = local.effective_cluster_role_arn
   version  = "1.35"
 
   access_config {
@@ -10,10 +10,10 @@ resource "aws_eks_cluster" "autoflow" {
   }
 
   vpc_config {
-    subnet_ids         = concat(aws_subnet.subnet_public[*].id, aws_subnet.subnet_private[*].id)
-    security_group_ids = [aws_security_group.sg.id]
-
+    subnet_ids              = concat(aws_subnet.subnet_public[*].id, aws_subnet.subnet_private[*].id)
+    security_group_ids      = [aws_security_group.sg.id]
+    endpoint_private_access = var.cluster_endpoint_private_access
+    endpoint_public_access  = var.cluster_endpoint_public_access
+    public_access_cidrs     = var.cluster_endpoint_public_access_cidrs
   }
-
-
-} 
+}
