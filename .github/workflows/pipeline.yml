@@ -4,15 +4,80 @@ on:
   push:
     branches: ["develop", "main"]
 
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: ["develop", "main"]
+
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Aplicar o plan de VPC/EKS apos aprovacao"
+        type: boolean
+        default: false
+      allow_destructive:
+        description: "Autorizar exclusoes somente apos revisar o plan"
+        type: boolean
+        default: false
+
 jobs:
 
-  deploy-aws:
-    name: Deploy Infra with Terraform
+  validate:
+    name: CI Terraform de VPC/EKS
+    if: github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Testar guard de conta AWS
+        run: python -m unittest discover -s scripts -p "test_verify_aws_account.py" -v
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.5"
+          terraform_wrapper: false
+      - name: Terraform fmt
+        run: terraform fmt -check -recursive infra
+      - name: Terraform init sem backend
+        run: terraform -chdir=infra init -backend=false -input=false
+      - name: Terraform validate
+        run: terraform -chdir=infra validate
+
+  deploy-aws:
+    name: Planear infraestrutura; Apply manual sob aprovacao
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/develop'
+    needs: validate
+    environment: homolog
+    concurrency:
+      group: autoflow-platform-develop
+      cancel-in-progress: false
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TF_STATE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
+      TF_STATE_KEY: ${{ vars.AWS_TF_STATE_KEY_INFRA }}
+      TF_VAR_aws_allowed_account_ids: '["${{ vars.AWS_EXPECTED_ACCOUNT_ID }}"]'
+      TF_VAR_region_default: ${{ vars.AWS_REGION }}
+      TF_VAR_cluster_role_arn: ${{ vars.AWS_EKS_CLUSTER_ROLE_ARN }}
+      TF_VAR_node_role_arn: ${{ vars.AWS_EKS_NODE_ROLE_ARN }}
+      TF_VAR_operator_access_role_arn: ${{ vars.AWS_EKS_OPERATOR_ACCESS_ROLE_ARN }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Test AWS account identity guard
+        run: python -m unittest discover -s scripts -p "test_verify_aws_account.py" -v
+
+      - name: Exigir credenciais temporarias e configuracao explicita
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$AWS_ACCESS_KEY_ID"
+          test -n "$AWS_SECRET_ACCESS_KEY"
+          test -n "$AWS_SESSION_TOKEN"
+          [[ "$AWS_REGION" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$ ]]
+          test -n "${{ vars.AWS_EXPECTED_ACCOUNT_ID }}"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -20,49 +85,76 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: us-east-1
+          aws-region: ${{ vars.AWS_REGION }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.5"
+          terraform_wrapper: false
 
-      - name: Validação de S3 Bucket
-        run: |
-          if aws s3api head-bucket --bucket state-autoflow-terraform 2>/dev/null; then
-            echo "Terraform state bucket already exists."
-          else
-            echo "Creating Terraform state bucket..."
-            aws s3api create-bucket \
-              --bucket state-autoflow-terraform \
-              --region us-east-1
-          fi
+      - name: Verify expected AWS account
+        env:
+          AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
+        run: python scripts/verify_aws_account.py
 
-      - name: Habilitar versionamento do S3
+      - name: Confirmar regiao AWS efetiva
+        shell: bash
+        run: test "$(aws ec2 describe-availability-zones --region "$AWS_REGION" --query 'AvailabilityZones[0].RegionName' --output text)" = "$AWS_REGION"
+
+      - name: Confirmar bucket Terraform previamente configurado
+        env:
+          TF_STATE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
+          TF_STATE_KEY: ${{ vars.AWS_TF_STATE_KEY_INFRA }}
         run: |
-          aws s3api put-bucket-versioning \
-            --bucket state-autoflow-terraform \
-            --versioning-configuration Status=Enabled
+          test -n "$TF_STATE_BUCKET"
+          test -n "$TF_STATE_KEY"
+          aws s3api head-bucket --bucket "$TF_STATE_BUCKET"
+          aws s3api head-object --bucket "$TF_STATE_BUCKET" --key "$TF_STATE_KEY" > /dev/null
 
       - name: Terraform Init
         working-directory: ./infra
-        run: terraform init
+        run: terraform init -input=false -reconfigure -backend-config="bucket=${TF_STATE_BUCKET}" -backend-config="key=${TF_STATE_KEY}" -backend-config="region=${AWS_REGION}" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
 
       - name: Terraform Validate
         working-directory: ./infra
         run: terraform validate
 
+      - name: Terraform fmt
+        working-directory: ./infra
+        run: terraform fmt -check -recursive
+
       - name: Terraform Plan
         working-directory: ./infra
-        run: terraform plan
+        run: terraform plan -input=false -no-color -out=infra.tfplan
 
-      - name: Terraform Apply
+      - name: Gate de exclusoes e substituicoes
         working-directory: ./infra
-        run: terraform apply -auto-approve
-  
-  create-pr:
-    name: Create PR to main
-    needs: deploy-aws
-    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
-    runs-on: ubuntu-latest
+        id: destroy-gate
+        env:
+          ALLOW_DESTRUCTIVE: ${{ inputs.allow_destructive }}
+        run: |
+          terraform show -json infra.tfplan > infra-plan.json
+          python - <<'PY'
+          import json, os, sys
+          plan = json.load(open("infra-plan.json", encoding="utf-8"))
+          changes = [item["address"] for item in plan.get("resource_changes", []) if "delete" in item["change"]["actions"]]
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"has_deletions={str(bool(changes)).lower()}\n")
+          print("Resources with delete/replacement actions:", changes)
+          sys.exit(bool(changes) and os.environ["ALLOW_DESTRUCTIVE"] != "true")
+          PY
+
+      - name: Exigir aprovacao efetiva de environment
+        if: inputs.apply && vars.TERRAFORM_APPLY_APPROVAL_CONFIGURED != 'true'
+        run: |
+          echo "Configure required reviewers no environment homolog e defina TERRAFORM_APPLY_APPROVAL_CONFIGURED=true." >&2
+          exit 1
+
+      - name: Aplicar plan apos aprovacao manual efetiva
+        if: inputs.apply && vars.TERRAFORM_APPLY_APPROVAL_CONFIGURED == 'true' && (steps.destroy-gate.outputs.has_deletions != 'true' || inputs.allow_destructive)
+        working-directory: ./infra
+        run: terraform apply -input=false infra.tfplan
 
     steps:
       - name: Checkout repository

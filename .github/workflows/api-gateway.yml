@@ -1,0 +1,123 @@
+name: Migração HTTP API
+on:
+  pull_request:
+    branches: [develop, main]
+    paths: ["infra/api-gateway/**", "scripts/*gateway*", ".github/workflows/api-gateway.yml"]
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: "Aplicar o plan revisado (exige aprovação no environment homolog)"
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: autoflow-api-gateway-homolog
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.AUTOFLOW_REPOSITORY || format('{0}/autoflow', github.repository_owner) }}
+          ref: ${{ vars.AUTOFLOW_CONTRACT_REF || 'develop' }}
+          path: .contract-autoflow
+          token: ${{ secrets.AUTOFLOW_READ_TOKEN || github.token }}
+      - name: Confrontar allowlist com controllers
+        env:
+          AUTOFLOW_REPO: ${{ github.workspace }}/.contract-autoflow
+        run: python -m unittest discover -s scripts -p test_gateway_routes.py -v
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.5"
+          terraform_wrapper: false
+      - run: terraform -chdir=infra/api-gateway fmt -check -recursive
+      - run: terraform -chdir=infra/api-gateway init -backend=false -input=false
+      - run: terraform -chdir=infra/api-gateway validate
+      - run: terraform -chdir=infra/api-gateway test
+      - run: terraform -chdir=infra/api-gateway/modules/private-eks init -backend=false -input=false
+      - run: terraform -chdir=infra/api-gateway/modules/private-eks test
+  plan-deploy:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/develop'
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: homolog
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+      TF_VAR_expected_account_id: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
+      TF_VAR_terraform_state_bucket: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
+      TF_VAR_infra_state_key: ${{ vars.AWS_TF_STATE_KEY_INFRA }}
+      TF_VAR_cors_origins: ${{ vars.API_GATEWAY_CORS_ORIGINS }}
+      TF_VAR_lambda_function_name: ${{ vars.AWS_LAMBDA_FUNCTION_NAME }}
+      TF_VAR_cluster_name: ${{ vars.EKS_CLUSTER_NAME }}
+      TF_VAR_nodegroup_name: ${{ vars.EKS_NODEGROUP_NAME }}
+      TF_STATE_KEY: ${{ vars.AWS_TF_STATE_KEY_GATEWAY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exigir credenciais temporarias e CORS explicito
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          API_GATEWAY_CORS_ORIGINS: ${{ vars.API_GATEWAY_CORS_ORIGINS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$AWS_ACCESS_KEY_ID"
+          test -n "$AWS_SECRET_ACCESS_KEY"
+          test -n "$AWS_SESSION_TOKEN"
+          [[ "$AWS_REGION" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$ ]]
+          test -n "$TF_VAR_expected_account_id"
+          test -n "$TF_STATE_KEY"
+          test -n "$TF_VAR_lambda_function_name"
+          test -n "$TF_VAR_cluster_name"
+          test -n "$TF_VAR_nodegroup_name"
+          test -n "$API_GATEWAY_CORS_ORIGINS"
+          python -c 'import json,os,sys; value=json.loads(os.environ["API_GATEWAY_CORS_ORIGINS"]); sys.exit(not isinstance(value,list))'
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Verificar sessão, conta, EKS e node group
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$TF_VAR_expected_account_id"
+          test "$(aws ec2 describe-availability-zones --region "$AWS_REGION" --query 'AvailabilityZones[0].RegionName' --output text)" = "$AWS_REGION"
+          aws s3api head-bucket --bucket "$TF_VAR_terraform_state_bucket"
+          aws s3api head-object --bucket "$TF_VAR_terraform_state_bucket" --key "$TF_VAR_infra_state_key" > /dev/null
+          test "$(aws eks describe-cluster --name "$TF_VAR_cluster_name" --query cluster.status --output text)" = ACTIVE
+          test "$(aws eks describe-nodegroup --cluster-name "$TF_VAR_cluster_name" --nodegroup-name "$TF_VAR_nodegroup_name" --query nodegroup.status --output text)" = ACTIVE
+          aws eks update-kubeconfig --name "$TF_VAR_cluster_name" --region "$AWS_REGION"
+          kubectl wait --for=condition=Ready nodes --all --timeout=120s
+          test "$(kubectl get nodes --no-headers | wc -l)" -ge 2
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.5"
+          terraform_wrapper: false
+      - name: Inicializar state exclusivo do gateway
+        working-directory: infra/api-gateway
+        run: terraform init -input=false -backend-config="bucket=$TF_VAR_terraform_state_bucket" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+      - name: Plano e bloqueio de destruições
+        working-directory: infra/api-gateway
+        run: |
+          terraform plan -input=false -out=gateway.tfplan
+          python ../../scripts/review_gateway_plan.py gateway.tfplan
+      - name: Exigir aprovacao efetiva configurada no environment
+        if: inputs.deploy && vars.TERRAFORM_APPLY_APPROVAL_CONFIGURED != 'true'
+        run: |
+          echo "Configure required reviewers no environment homolog e defina TERRAFORM_APPLY_APPROVAL_CONFIGURED=true." >&2
+          exit 1
+      - name: Aplicar somente mediante despacho aprovado
+        if: inputs.deploy && vars.TERRAFORM_APPLY_APPROVAL_CONFIGURED == 'true'
+        working-directory: infra/api-gateway
+        run: terraform apply -input=false gateway.tfplan
+      - name: Exibir endpoint para o deploy da aplicação
+        if: inputs.deploy && vars.TERRAFORM_APPLY_APPROVAL_CONFIGURED == 'true'
+        working-directory: infra/api-gateway
+        run: terraform output gateway_url
