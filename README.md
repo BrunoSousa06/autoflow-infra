@@ -4,7 +4,7 @@ Este repositório declara a infraestrutura AWS do AutoFlow com Terraform. A arqu
 
 ## Documentação da arquitetura
 
-Leia na ordem: [arquitetura e diagramas C4](docs/api-gateway/arquitetura.md), [ADR-001](docs/api-gateway/adr-001-api-gateway.md), [RFC técnica](docs/api-gateway/rfc-api-gateway.md), [runbook operacional](docs/api-gateway/runbook.md) e [checkpoint de evidências e pendências](docs/api-gateway/progresso.md). O [README do root Terraform](infra/api-gateway/README.md) contém validações locais.
+Leia na ordem: [arquitetura e diagramas C4](docs/api-gateway/arquitetura.md), [ADR-001](docs/api-gateway/adr-001-api-gateway.md), [RFC técnica](docs/api-gateway/rfc-api-gateway.md), [runbook operacional](docs/api-gateway/runbook.md). O [README do root Terraform](infra/api-gateway/README.md) contém validações locais.
 
 Para configurar Actions e inputs Terraform, consulte o [catálogo de variables e secrets](docs/variables-and-secrets.md) e seu [histórico](docs/variables-changelog.md).
 
@@ -41,7 +41,3 @@ Os componentes usam states S3 separados: infraestrutura EKS, aplicação, RDS, L
 CI executa em PRs e pushes para `develop` e `main`. CD somente por `workflow_dispatch` em `develop` e destinado a `homolog`; os workflows incluem Terraform Plan, verificação de estado/conta, gates para destruições e Apply condicionado aos inputs e guards. Todos os componentes precisam de revisão do plano e autorização específica para mudanças destrutivas. O job usa GitHub Environment `homolog`; **não há evidência local de Required reviewers efetivamente configurados**, portanto não se deve afirmar que exista aprovação efetiva do Environment. Também não há evidência de execução do CD pelo GitHub Actions. Consulte a [RFC](docs/api-gateway/rfc-api-gateway.md) e o [runbook](docs/api-gateway/runbook.md). O workflow de plataforma permanece responsável pelo EKS. Nenhum workflow instala gateways adicionais.
 
 Use `AWS_PROFILE`, `AWS_REGION`, `AWS_EXPECTED_ACCOUNT_ID` e `TF_VAR_*` localmente. O guard `scripts/verify_aws_account.py` deve passar antes de operações AWS. GitHub Actions Variables contêm conta, região, bucket, keys e parâmetros não sensíveis; credenciais e dados sensíveis permanecem em GitHub Secrets.
-
-## Estado de homologação
-
-No checkpoint datado de 13/10/2026, a HTTP API estava implantada; VPC Link `AVAILABLE`; ALB interno ativo; Target Groups frontend/backend 2/2 healthy; RDS disponível; 47 migrations Flyway validadas; login válido, emissão de JWT e consulta autenticada ao backend aprovados após o fechamento da Function URL e retirada do Kong. Isso comprova somente a homologação descrita no checkpoint, não execução de CD pelo GitHub Actions nem implantação em outra conta. Não existe infraestrutura de produção documentada como implantada; a segregação futura com segundo EKS/RDS está fora do estado atual.
