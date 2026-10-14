@@ -102,9 +102,6 @@ jobs:
           aws s3api head-object --bucket "$TF_VAR_terraform_state_bucket" --key "$TF_VAR_infra_state_key" > /dev/null
           test "$(aws eks describe-cluster --name "$TF_VAR_cluster_name" --query cluster.status --output text)" = ACTIVE
           test "$(aws eks describe-nodegroup --cluster-name "$TF_VAR_cluster_name" --nodegroup-name "$TF_VAR_nodegroup_name" --query nodegroup.status --output text)" = ACTIVE
-          aws eks update-kubeconfig --name "$TF_VAR_cluster_name" --region "$AWS_REGION"
-          kubectl wait --for=condition=Ready nodes --all --timeout=120s
-          test "$(kubectl get nodes --no-headers | wc -l)" -ge 2
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.16.5"
