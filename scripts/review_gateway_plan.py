@@ -9,13 +9,30 @@ ALLOWED_METHODS = {"GET", "POST", "PATCH", "DELETE"}
 
 
 def review(plan, expected_account):
-    changes = [item for item in plan.get("resource_changes", [])
+    if not isinstance(plan, dict) or not isinstance(plan.get("resource_changes"), list):
+        raise RuntimeError("JSON do plan inválido ou incompleto: resource_changes ausente ou inválido.")
+
+    resource_changes = plan["resource_changes"]
+    for item in resource_changes:
+        if (not isinstance(item, dict) or not isinstance(item.get("address"), str)
+                or not isinstance(item.get("change"), dict)
+                or not isinstance(item["change"].get("actions"), list)
+                or not item["change"]["actions"]
+                or not all(isinstance(action, str) for action in item["change"]["actions"])):
+            raise RuntimeError("JSON do plan inválido ou incompleto: resource_changes malformado.")
+
+    # Apenas resource_changes descreve as ações deste plan. Recursos presentes em
+    # prior_state/planned_values representam inventário, não criações pendentes.
+    changes = [item for item in resource_changes
                if item["change"]["actions"] not in (["no-op"], ["read"])]
     counts = {}
     for item in changes:
         action = ",".join(item["change"]["actions"])
         counts[action] = counts.get(action, 0) + 1
     print("Ações planejadas:", json.dumps(counts, sort_keys=True))
+    if not changes:
+        print("Plan aprovado na revisão estática: nenhuma alteração planejada.")
+        return
     if len(changes) != 152 or any(item["change"]["actions"] != ["create"] for item in changes):
         raise RuntimeError("O plan não corresponde ao escopo autorizado: 152 criações e nenhuma atualização/exclusão.")
 
