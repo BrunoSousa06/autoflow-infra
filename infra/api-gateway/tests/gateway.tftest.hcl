@@ -1,0 +1,63 @@
+mock_provider "aws" {
+  mock_data "aws_eks_cluster" {
+    defaults = { vpc_config = [{ cluster_security_group_id = "sg-12345678" }] }
+  }
+  mock_data "aws_eks_node_group" {
+    defaults = { resources = [{ autoscaling_groups = [{ name = "eks-test-asg" }] }] }
+  }
+  mock_data "aws_lambda_function" {
+    defaults = {
+      function_name = "autoflow-test"
+      invoke_arn    = "arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/arn:aws:lambda:us-east-1:123456789012:function:autoflow-test/invocations"
+    }
+  }
+}
+override_data {
+  target = data.terraform_remote_state.eks
+  values = { outputs = { vpc_id = "vpc-12345678", private_subnet_ids = ["subnet-12345678", "subnet-87654321"] } }
+}
+variables {
+  expected_account_id    = "123456789012"
+  terraform_state_bucket = "autoflow-teste-state"
+  lambda_function_name   = "autoflow-test"
+}
+run "contratos_e_isolamento" {
+  command = plan
+  assert {
+    condition     = aws_apigatewayv2_integration.login.integration_type == "AWS_PROXY" && aws_apigatewayv2_integration.login.payload_format_version == "2.0"
+    error_message = "Login deve usar integração nativa Lambda v2."
+  }
+  assert {
+    condition     = !contains(keys(aws_apigatewayv2_route.backend), "POST /api/auth/login") && !contains(keys(aws_apigatewayv2_route.backend), "ANY /api/{proxy+}")
+    error_message = "Backend não pode oferecer login concorrente nem proxy genérico."
+  }
+  assert {
+    condition     = aws_apigatewayv2_integration.backend["/clientes/{id}/status"].request_parameters["overwrite:path"] == "/clientes/$${request.path.id}/status"
+    error_message = "O prefixo /api deve ser removido preservando os parâmetros."
+  }
+  assert {
+    condition     = length(aws_apigatewayv2_api.this.cors_configuration) == 0
+    error_message = "Same-origin não deve abrir CORS."
+  }
+  assert {
+    condition     = aws_lambda_permission.login.principal == "apigateway.amazonaws.com" && aws_lambda_permission.login.source_account == var.expected_account_id
+    error_message = "Permissão de invocação deve restringir principal e conta."
+  }
+  assert {
+    condition     = !strcontains(aws_apigatewayv2_stage.this.access_log_settings[0].format, "$context.path") && !strcontains(aws_apigatewayv2_stage.this.access_log_settings[0].format, "sourceIp")
+    error_message = "Logs não podem incluir path real ou IP."
+  }
+}
+run "cors_explicito" {
+  command = plan
+  variables { cors_origins = ["https://frontend.example.com"] }
+  assert {
+    condition     = aws_apigatewayv2_api.this.cors_configuration[0].allow_origins == toset(["https://frontend.example.com"])
+    error_message = "CORS deve refletir somente a origem aprovada."
+  }
+}
+run "rejeitar_cors_aberto" {
+  command = plan
+  variables { cors_origins = ["*"] }
+  expect_failures = [var.cors_origins]
+}

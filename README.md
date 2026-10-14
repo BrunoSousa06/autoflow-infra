@@ -1,39 +1,45 @@
 # Infraestrutura do AutoFlow
 
-Este repositório declara, por Terraform, a infraestrutura compartilhada do AutoFlow: rede, cluster EKS e a instalação do Kong Gateway OSS com Kong Ingress Controller (KIC). A configuração versionada não comprova que os recursos foram criados ou estão ativos na AWS.
+Este repositório declara a infraestrutura AWS do AutoFlow com Terraform. A arquitetura final é **Amazon API Gateway HTTP API, Lambda, VPC Link, ALB interno, EKS e RDS PostgreSQL**. Não há instalação ou roteamento Kong na configuração operacional.
+
+## Documentação da arquitetura
+
+Leia na ordem: [arquitetura e diagramas C4](docs/api-gateway/arquitetura.md), [ADR-001](docs/api-gateway/adr-001-api-gateway.md), [RFC técnica](docs/api-gateway/rfc-api-gateway.md), [runbook operacional](docs/api-gateway/runbook.md) e [checkpoint de evidências e pendências](docs/api-gateway/progresso.md). O [README do root Terraform](infra/api-gateway/README.md) contém validações locais.
 
 ## Responsabilidades
 
 - `infra/`: VPC, subnets, Security Groups, EKS e node group.
-- `infra/kong/`: root Terraform independente que instala Kong OSS/KIC por Helm no cluster existente.
-- `autoflow`: mantém Deployments, Services, Ingresses e `KongPlugin` específicos da aplicação.
-- `autoflow-db`: mantém RDS e seus controles de rede; `autoflow-lambda` mantém a função e a integração API Gateway HTTP legada.
+- `infra/api-gateway/`: HTTP API, rotas, integração nativa com Lambda, VPC Link, ALB interno, Target Groups e observabilidade.
+- `autoflow`: Deployments, Services internos e NodePorts privados consumidos pelo ALB.
+- `autoflow-lambda`: função de autenticação e execução em rede privada.
+- `autoflow-db`: RDS PostgreSQL e controles de rede.
 
-## Kong
+## Fluxo de requisições
 
-O root `infra/kong/` fixa versões do chart e das imagens, configura o Gateway em modo DB-less e habilita o plugin `aws-lambda`. O proxy está configurado como Service `ClusterIP`; este release não publica uma entrada HTTPS. O Admin API, Manager e Portal estão desabilitados.
-
-As rotas são mantidas no repositório `autoflow` e não são aplicadas por este root. IRSA para invocar a Lambda, endpoint público, TLS/DNS e execução em cluster permanecem gates pendentes. A configuração e os comandos de validação local estão no [README do root Kong](infra/kong/README.md). Testes locais de template/validação não comprovam instalação ou tráfego em AWS.
-
-## Terraform e pipelines
-
-Há roots e states independentes para a infraestrutura EKS e para Kong. Antes de inicializar ou planejar um backend remoto, confirme com os responsáveis o bucket, a key e o state autoritativo; não inicialize state vazio sobre recursos existentes. O workflow de Kong depende da etapa de infraestrutura e de readiness do cluster. Não execute roots que atuam no mesmo cluster em paralelo.
-
-Nenhum `.tfvars` ou backend HCL de exemplo é versionado. Em execução local, forneça `AWS_PROFILE`, `AWS_REGION`, `AWS_EXPECTED_ACCOUNT_ID`, `TF_VAR_aws_profile`, `TF_VAR_aws_allowed_account_ids` (JSON de uma lista) e os ARNs não secretos das roles por `TF_VAR_*`. O guard `scripts/verify_aws_account.py` deve passar antes de operações AWS. Para cada root, passe bucket e key aprovados como parâmetros `-backend-config`; infra e Kong usam keys distintas. CI/CD usa GitHub Actions Variables para conta, região, bucket, keys e ARNs, e GitHub Secrets para as credenciais AWS configuradas no runner.
-
-## Segurança e custos VPC/EKS
-
-A revisão pré-deploy, o progresso, os parâmetros por ambiente e os gates de readiness estão em [Segurança de rede e custos VPC/EKS](infra/SEGURANCA-CUSTOS-READINESS.md). O deploy permanece pendente da revisão de um novo plano com parâmetros e state aprovados.
-
-## Validação local do Kong
-
-Com Terraform e Helm `3.19.0` disponíveis, no diretório `infra/kong/`:
-
-```bash
-bash ./validate.sh
-terraform init -backend=false -input=false
-terraform fmt -check -recursive
-terraform validate
+```mermaid
+flowchart LR
+  Browser[Navegador] -->|HTTPS| API[API Gateway HTTP API]
+  API -->|AWS_PROXY payload 2.0| Lambda[Lambda de autenticação]
+  Lambda --> RDS[(RDS PostgreSQL)]
+  API -->|VPC Link| ALB[ALB interno]
+  ALB -->|NodePorts privados| EKS[EKS: Nginx e Spring Boot]
+  EKS --> RDS
 ```
 
-Esses comandos validam localmente a configuração e os templates. Não aplicam recursos, não consultam o EKS nem verificam autorização AWS. Nenhum deploy ou alteração AWS é comprovado por este README.
+O navegador usa a mesma origem HTTPS para frontend e API. O API Gateway invoca a Lambda diretamente; as integrações de negócio e frontend usam VPC Link e ALB interno. A Function URL antiga foi removida; a invocação da Lambda ocorre pela permissão restrita ao API Gateway.
+
+## Ordem de implantação
+
+Implante ou confirme dependências nesta ordem, respeitando os states e owners existentes: (1) VPC/EKS e rede; (2) RDS e conectividade privada; (3) função Lambda e configuração segura; (4) aplicação no EKS (Services e NodePorts esperados pelo ALB); (5) API Gateway, VPC Link e ALB interno; (6) smoke tests ponta a ponta. Esta ordem decorre das dependências declaradas nos Terraform; não representa uma execução comprovada em conta nova. O procedimento detalhado e as condições de reprodução estão no [runbook](docs/api-gateway/runbook.md).
+
+## States e pipelines
+
+Os componentes usam states S3 separados: infraestrutura EKS, aplicação, RDS, Lambda e API Gateway. Confirme conta, região, bucket, key e state autoritativo antes de inicializar cada root. Não inicialize state vazio sobre recursos existentes e não edite arquivos de state manualmente.
+
+Para PR para `develop`, CI valida e testa sem aplicar. Após merge, o CD é manual: `workflow_dispatch` em `develop`, plan revisado e Apply condicionado ao despacho explícito e aprovação efetiva no environment `homolog`. A configuração efetiva de required reviewers precisa ser confirmada no GitHub; detalhes e limites constam na [RFC](docs/api-gateway/rfc-api-gateway.md). O workflow de plataforma permanece responsável pelo EKS. Nenhum workflow instala gateways adicionais.
+
+Use `AWS_PROFILE`, `AWS_REGION`, `AWS_EXPECTED_ACCOUNT_ID` e `TF_VAR_*` localmente. O guard `scripts/verify_aws_account.py` deve passar antes de operações AWS. GitHub Actions Variables contêm conta, região, bucket, keys e parâmetros não sensíveis; credenciais e dados sensíveis permanecem em GitHub Secrets.
+
+## Estado de homologação
+
+No checkpoint de 13/10/2026, a HTTP API estava implantada; VPC Link `AVAILABLE`; ALB interno ativo; Target Groups frontend/backend 2/2 healthy; RDS disponível; 47 migrations Flyway validadas; login válido, emissão de JWT e consulta autenticada ao backend aprovados após o fechamento da Function URL e retirada Kong. Isso comprova somente o ambiente descrito no checkpoint, não uma conta nova.

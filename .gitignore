@@ -16,10 +16,13 @@ crash.*.log
 backend.*.hcl
 *.tfplan*
 *.plan*
+infra/kong/.homolog-tls/
 .env
 .env.*
 credentials
 .aws/
+__pycache__/
+.contract-autoflow/
 
 # Ignore override files as they are usually used to override resources locally and so
 # are not checked in
