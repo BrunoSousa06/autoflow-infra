@@ -1,7 +1,7 @@
 # RFC técnica — Entrada do AutoFlow com Amazon API Gateway
 
 - **Data:** 13/10/2026
-- **Estado:** desenho implantado e homologado em um ambiente AWS Academy Learner Lab; reprodução em outra conta não presumida.
+- **Estado:** configuração Terraform declarada e homologada somente no ambiente AWS Academy Learner Lab documentado; nenhuma implantação em produção é declarada e reprodução em outra conta não presumida.
 - **Escopo:** HTTP API, autenticação Lambda, acesso privado ao EKS/RDS, operação Terraform e CI/CD deste repositório.
 
 ## Resumo
@@ -26,7 +26,7 @@ O root `infra/api-gateway` consome outputs do state de EKS e consulta EKS, node 
 
 ## CI/CD
 
-Para PR destinado a `develop`, o workflow específico executa verificação de contrato de rotas, `fmt`, `init -backend=false`, `validate`, testes do root e do módulo privado; não aplica infraestrutura. Após merge em `develop`, a implantação é iniciada por `workflow_dispatch` no branch `develop`: o workflow valida credenciais temporárias/conta, consulta state e dependências, cria e verifica plano. Apply só ocorre se solicitado no despacho e após aprovação efetiva do environment `homolog`, com `TERRAFORM_APPLY_APPROVAL_CONFIGURED=true`. Sem o booleano, o job apenas valida e planeja. O workflow de plataforma tem gate manual equivalente para seu root VPC/EKS. Isso descreve workflows versionados; execuções futuras dependem da configuração real de GitHub Environments, Variables e Secrets.
+CI ocorre automaticamente em PRs e pushes para `develop` e `main`, conforme os workflows de cada repositório. CD só é iniciado por `workflow_dispatch` em `develop`, com destino ao Environment `homolog`. O workflow valida credenciais/conta e state, gera Terraform Plan e aplica gates de segurança; alterações destrutivas exigem input de autorização e revisão do plano. Apply depende de despacho explícito e de `TERRAFORM_APPLY_APPROVAL_CONFIGURED=true`. Isso é um guard do workflow, não evidência de Required reviewers configurados no GitHub Environment; aprovação efetiva permanece não verificada. Não há evidência de execução do CD pelo GitHub Actions. A configuração também não declara um segundo EKS/RDS ou CD de produção.
 
 ## Homologação registrada
 
