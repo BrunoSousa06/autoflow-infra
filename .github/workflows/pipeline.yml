@@ -43,7 +43,7 @@ jobs:
 
   plan:
     name: Terraform Plan protegido
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/develop'
+    if: github.ref == 'refs/heads/develop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     needs: validate
     runs-on: ubuntu-latest
     env:
@@ -94,7 +94,7 @@ jobs:
         id: plan
         working-directory: infra
         env:
-          ALLOW_DESTRUCTIVE: ${{ inputs.allow_destructive }}
+          ALLOW_DESTRUCTIVE: ${{ inputs.allow_destructive || 'false' }}
         run: |
           set -euo pipefail
           terraform plan -input=false -no-color -out=infra.tfplan
@@ -129,8 +129,8 @@ jobs:
           compression-level: 0
 
   apply:
-    name: Apply e rollout (aprovação requerida)
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/develop' && inputs.apply
+    name: Terraform Apply homolog (aprovação requerida)
+    if: github.ref == 'refs/heads/develop' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.apply))
     needs: plan
     runs-on: ubuntu-latest
     environment: homolog
@@ -146,6 +146,7 @@ jobs:
       EKS_LEASE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       EKS_LEASE_KEY: ci/eks-endpoint-lease.json
       PLAN_ENCRYPTION_PASSPHRASE: ${{ secrets.TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE }}
+      ALLOW_DESTRUCTIVE: ${{ inputs.allow_destructive || 'false' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -193,12 +194,6 @@ jobs:
       - name: Aplicar plan aprovado
         working-directory: infra
         run: terraform apply -input=false infra.tfplan
-      - name: Rollout Kubernetes
-        run: |
-          set -euo pipefail
-          aws eks update-kubeconfig --name eks-autoflow --region "$AWS_REGION"
-          kubectl rollout status deployment/backend-deployment --timeout=10m
-          kubectl rollout status deployment/frontend-deployment --timeout=10m
       - name: Limpar CIDR temporário mesmo após falha
         if: always()
         run: python scripts/eks_endpoint_access.py cleanup
