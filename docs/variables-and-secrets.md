@@ -1,12 +1,12 @@
 # Variables e secrets
 
-Inventário observado nos workflows e Terraform deste repositório. Deploy implementado somente para `homolog`; produção é planejada para outra branch. CI não requer acesso AWS. Jobs de deploy usam GitHub Environment `homolog`; a existência/proteções do Environment não foram verificadas.
+Inventário observado nos workflows e Terraform deste repositório. Deploy implementado somente para `homolog`; produção é planejada para outra branch. CI não requer acesso AWS. Terraform Plan usa Repository Secrets/Variables sem Environment; somente Apply usa o Environment `homolog`. Required reviewers devem ser configurados no próprio GitHub.
 
 ## GitHub Actions — Secrets
 
 | Nome | Tipo / finalidade | Onde configurar; origem | CI / CD | Exemplo seguro | Consumidor; default/ausência |
 |---|---|---|---|---|---|
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | Secrets; sessão temporária AWS | Environment `homolog`; mesma sessão AWS Academy Learner Lab | CD | Não aplicável | `.github/workflows/pipeline.yml`, `api-gateway.yml`; obrigatórios, sem defaults. |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | Secrets; sessão temporária AWS | Repository Secrets; mesma sessão AWS Academy Learner Lab | CD | Não aplicável | `.github/workflows/pipeline.yml`, `api-gateway.yml`; usados pelos jobs de Plan e Apply, sem defaults. |
 | `AUTOFLOW_READ_TOKEN` | Secret opcional para checkout do contrato `autoflow` | GitHub Repository secret; token de leitura se o repo for privado | CI de gateway | Não aplicável | `api-gateway.yml`; fallback `${{ github.token }}`. Se token padrão tiver acesso, não cadastrar. |
 | `GITHUB_TOKEN` (`github.token`) | Token automático de checkout pelo workflow | Gerado pelo GitHub; não cadastrar | CI | Não aplicável | `api-gateway.yml`; default para checkout do contrato. |
 
@@ -14,18 +14,20 @@ Inventário observado nos workflows e Terraform deste repositório. Deploy imple
 
 | Nome | Finalidade | Onde; origem | CI / CD | Exemplo seguro | Consumidor; default/ausência |
 |---|---|---|---|---|---|
-| `AWS_REGION` | Região AWS | Environment `homolog` | CD | `us-east-1` | Ambos workflows de deploy; obrigatória, sem default. |
-| `AWS_EXPECTED_ACCOUNT_ID` | Conta permitida pelos guards | Environment `homolog` | CD | `123456789012` | Ambos; obrigatória, sem default. |
-| `AWS_TERRAFORM_STATE_BUCKET` | Bucket S3 preexistente | Environment `homolog` | CD | `autoflow-tfstate-homolog-exemplo` | Ambos; obrigatório, sem default. |
-| `AWS_TF_STATE_KEY_INFRA` | Key state VPC/EKS | Environment `homolog` | CD | `homolog/infra/terraform.tfstate` | `pipeline.yml` e input state remoto em `api-gateway.yml`; obrigatória. |
-| `AWS_EKS_CLUSTER_ROLE_ARN`, `AWS_EKS_NODE_ROLE_ARN`, `AWS_EKS_OPERATOR_ACCESS_ROLE_ARN` | Roles IAM para cluster, node group e acesso operador | Environment `homolog`; ARNs provisionados/aprovados | CD | `arn:aws:iam::123456789012:role/exemplo` | `pipeline.yml`; sem defaults. Terraform suporta fallback legado `role_arn`, mas workflow usa cada variable. |
-| `AWS_TF_STATE_KEY_GATEWAY` | Key exclusiva do state API Gateway | Environment `homolog` | CD | `homolog/api-gateway/terraform.tfstate` | `api-gateway.yml`; obrigatória, sem default. |
-| `API_GATEWAY_CORS_ORIGINS` | Lista JSON de origens HTTPS CORS | Environment `homolog` | CD | `[]` | `api-gateway.yml`; obrigatória no shell preflight, sem default; array JSON. |
-| `AWS_LAMBDA_FUNCTION_NAME` | Nome de função Lambda existente | Environment `homolog` | CD | `autoflow-auth-homolog` | `api-gateway.yml`; sem default efetivo (o Terraform declara-o como obrigatório). |
-| `EKS_CLUSTER_NAME`, `EKS_NODEGROUP_NAME` | Cluster/node group verificados pelo gateway | Environment `homolog` | CD | `autoflow-homolog`, `autoflow-nodes` | `api-gateway.yml`; sem defaults efetivos, embora Terraform gateway declare defaults locais. |
-| `AUTOFLOW_REPOSITORY` | Repositório de contrato verificado pelo CI | GitHub Repository variable ou Environment homolog | CI, opcional | `organizacao/autoflow` | `api-gateway.yml`; default `${{ format('{0}/autoflow', github.repository_owner) }}`. |
-| `AUTOFLOW_CONTRACT_REF` | Ref de contrato | GitHub Repository variable ou Environment homolog | CI, opcional | `develop` | `api-gateway.yml`; default `develop`. |
-| `TERRAFORM_APPLY_APPROVAL_CONFIGURED` | Guard adicional de Apply | Environment `homolog`; marcar `true` somente após required reviewers | CD se `apply/deploy=true` | `true` | Os dois workflows; ausente/diferente bloqueia Apply. Não substitui proteção real do Environment. |
+| `AWS_REGION` | Região AWS | Repository Variable | CD | `us-east-1` | Ambos workflows de deploy; obrigatória, sem default. |
+| `AWS_EXPECTED_ACCOUNT_ID` | Conta permitida pelos guards | Repository Variable | CD | `123456789012` | Ambos; obrigatória, sem default. |
+| `AWS_TERRAFORM_STATE_BUCKET` | Bucket S3 preexistente | Repository Variable | CD | `autoflow-tfstate-homolog-exemplo` | Ambos; obrigatório, sem default. |
+| `AWS_TF_STATE_KEY_INFRA` | Key state VPC/EKS | Repository Variable | CD | `homolog/infra/terraform.tfstate` | `pipeline.yml` e input state remoto em `api-gateway.yml`; obrigatória. |
+| `AWS_EKS_CLUSTER_ROLE_ARN`, `AWS_EKS_NODE_ROLE_ARN`, `AWS_EKS_OPERATOR_ACCESS_ROLE_ARN` | Roles IAM para cluster, node group e acesso operador | Repository Variables; ARNs provisionados/aprovados | CD | `arn:aws:iam::123456789012:role/exemplo` | `pipeline.yml`; sem defaults. Terraform suporta fallback legado `role_arn`, mas workflow usa cada variable. |
+| `AWS_TF_STATE_KEY_GATEWAY` | Key exclusiva do state API Gateway | Repository Variable | CD | `homolog/api-gateway/terraform.tfstate` | `api-gateway.yml`; obrigatória, sem default. |
+| `API_GATEWAY_CORS_ORIGINS` | Lista JSON de origens HTTPS CORS | Repository Variable | CD | `[]` | `api-gateway.yml`; obrigatória no shell preflight, sem default; array JSON. |
+| `AWS_LAMBDA_FUNCTION_NAME` | Nome de função Lambda existente | Repository Variable | CD | `autoflow-auth-homolog` | `api-gateway.yml`; sem default efetivo (o Terraform declara-o como obrigatório). |
+| `EKS_CLUSTER_NAME`, `EKS_NODEGROUP_NAME` | Cluster/node group verificados pelo gateway | Repository Variables | CD | `autoflow-homolog`, `autoflow-nodes` | `api-gateway.yml`; sem defaults efetivos, embora Terraform gateway declare defaults locais. |
+| `AUTOFLOW_REPOSITORY` | Repositório de contrato verificado pelo CI | GitHub Repository Variable | CI, opcional | `organizacao/autoflow` | `api-gateway.yml`; default `${{ format('{0}/autoflow', github.repository_owner) }}`. |
+| `AUTOFLOW_CONTRACT_REF` | Ref de contrato | GitHub Repository Variable | CI, opcional | `develop` | `api-gateway.yml`; default `develop`. |
+| `TERRAFORM_APPLY_APPROVAL_CONFIGURED` | Guard adicional de Apply | Repository Variable; marcar `true` somente após configurar Required reviewers no Environment `homolog` | CD se `apply/deploy=true` | `true` | Os dois workflows; ausente/diferente bloqueia Apply. Não substitui proteção real do Environment. |
+
+Secrets e variables consumidos tanto pelo Plan quanto pelo Apply devem existir como Repository Secrets/Variables. Não cadastre cópias desses mesmos nomes no Environment `homolog`, pois os valores do Environment podem prevalecer para o job Apply. Reserve o Environment exclusivamente para Required reviewers e regras de deployment.
 
 ## Terraform inputs
 

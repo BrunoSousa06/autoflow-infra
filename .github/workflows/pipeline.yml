@@ -46,7 +46,6 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/develop'
     needs: validate
     runs-on: ubuntu-latest
-    environment: homolog-plan
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
       TF_STATE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}

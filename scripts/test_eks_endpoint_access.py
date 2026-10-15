@@ -73,6 +73,11 @@ class EndpointAccessTests(unittest.TestCase):
         content = workflow.read_text(encoding="utf-8")
         self.assertIn("group: autoflow-eks-endpoint-deploy", content)
         self.assertIn("cancel-in-progress: false", content)
+        plan = content.split("  plan:", 1)[1].split("  apply:", 1)[0]
+        apply = content.split("  apply:", 1)[1]
+        self.assertNotIn("environment:", plan)
+        self.assertIn("environment: homolog", apply)
+        self.assertIn("required_reviewers", apply)
 
 
 if __name__ == "__main__":
