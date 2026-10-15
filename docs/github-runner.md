@@ -1,6 +1,6 @@
 # Execução do Terraform em runners GitHub-hosted
 
-O workflow de VPC/EKS usa `ubuntu-latest` tanto no Plan quanto no Apply. A variável Terraform `create_github_runner` é forçada a `false`; o fluxo não requer GitHub App, PAT ou Secrets Manager para registrar runners.
+O workflow de VPC/EKS usa `ubuntu-latest` tanto no Plan quanto no Apply. O root Terraform não provisiona mais uma EC2 runner nem requer GitHub App, PAT ou Secrets Manager para registrar runners.
 
 ## Acesso temporário ao endpoint EKS
 

@@ -26,7 +26,7 @@ git diff --check
 
 **Resultados históricos anteriores:** testes de inventário (9 cenários) passaram quando o coletor estava presente; antes da remoção dos protótipos, a suíte continha 36 testes. Esses resultados não validam a implementação atual do runner nem o conteúdo deste checkout.
 
-**Atualização da tarefa do runner:** em execução anterior, Terraform `fmt -check`, `init -backend=false` e `validate` passaram, assim como 23 testes encontrados naquele momento. No checkout revisado depois, `scripts/test_inventory_recovery.py` não pode ser importado porque `inventory_recovery.py` não existe; esse teste órfão foi preservado fora do commit. Nenhum `plan/apply/destroy` foi executado. Consulte `docs/github-runner.md` para limitações e ativação.
+**Atualização da tarefa do runner:** em execução anterior, Terraform `fmt -check`, `init -backend=false` e `validate` passaram, assim como 23 testes encontrados naquele momento. O teste órfão `scripts/test_inventory_recovery.py`, sem coletor correspondente neste checkout e exclusivo da trilha de Disaster Recovery pausada, foi removido na limpeza do runner EC2. Nenhum `plan/apply/destroy` foi executado. Consulte `docs/github-runner.md` para os runners GitHub-hosted.
 
 **Estado operacional:** somente chamadas AWS read-only pelo perfil `fiap-lab`; sem Terraform Apply/Destroy, sem criação/exclusão de bucket, sem alteração de SG/endpoint EKS, IAM, workflows ou secrets; sem commit/push/merge. O GitHub CLI não tinha autenticação.
 

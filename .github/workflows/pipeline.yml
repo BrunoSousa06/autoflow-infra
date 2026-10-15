@@ -56,7 +56,6 @@ jobs:
       TF_VAR_cluster_role_arn: ${{ vars.AWS_EKS_CLUSTER_ROLE_ARN }}
       TF_VAR_node_role_arn: ${{ vars.AWS_EKS_NODE_ROLE_ARN }}
       TF_VAR_operator_access_role_arn: ${{ vars.AWS_EKS_OPERATOR_ACCESS_ROLE_ARN }}
-      TF_VAR_create_github_runner: 'false'
       EKS_CLUSTER_NAME: eks-autoflow
       EKS_LEASE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       EKS_LEASE_KEY: ci/eks-endpoint-lease.json
@@ -78,7 +77,6 @@ jobs:
           EXPECTED_ACCOUNT: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
         run: |
           set -euo pipefail
-          test "$TF_VAR_create_github_runner" = false
           test "$(aws sts get-caller-identity --query Account --output text)" = "$EXPECTED_ACCOUNT"
           echo "ip=$(curl -4fsS https://checkip.amazonaws.com | tr -d '\n')" >> "$GITHUB_OUTPUT"
           test -n "$PLAN_ENCRYPTION_PASSPHRASE"
@@ -146,7 +144,6 @@ jobs:
       TF_VAR_cluster_role_arn: ${{ vars.AWS_EKS_CLUSTER_ROLE_ARN }}
       TF_VAR_node_role_arn: ${{ vars.AWS_EKS_NODE_ROLE_ARN }}
       TF_VAR_operator_access_role_arn: ${{ vars.AWS_EKS_OPERATOR_ACCESS_ROLE_ARN }}
-      TF_VAR_create_github_runner: 'false'
       EKS_LEASE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       EKS_LEASE_KEY: ci/eks-endpoint-lease.json
       PLAN_ENCRYPTION_PASSPHRASE: ${{ secrets.TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE }}
