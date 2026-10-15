@@ -8,6 +8,8 @@ Leia na ordem: [arquitetura e diagramas C4](docs/api-gateway/arquitetura.md), [A
 
 Para configurar Actions e inputs Terraform, consulte o [catálogo de variables e secrets](docs/variables-and-secrets.md) e seu [histórico](docs/variables-changelog.md).
 
+Para investigar nós EC2 que não registram no Kubernetes, consulte o [runbook de diagnóstico e recuperação EKS](docs/eks-node-recovery.md). O procedimento é somente leitura até a seção explícita de recuperação manual; não há reboot automatizado.
+
 ## Responsabilidades
 
 - `infra/`: VPC, subnets, Security Groups, EKS e node group.
