@@ -92,9 +92,9 @@ variable "cluster_endpoint_public_access" {
 }
 
 variable "cluster_endpoint_public_access_cidrs" {
-  description = "CIDRs IPv4 autorizados a acessar o endpoint público do EKS; informe-os fora do código por ambiente."
+  description = "CIDRs IPv4 permanentes iniciais do endpoint EKS; leases temporários do runner são gerenciados pela pipeline."
   type        = list(string)
-  default     = []
+  default     = ["189.6.8.245/32"]
 
   validation {
     condition     = alltrue([for cidr in var.cluster_endpoint_public_access_cidrs : can(cidrnetmask(cidr)) && cidr != "0.0.0.0/0"])
