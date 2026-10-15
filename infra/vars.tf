@@ -113,3 +113,44 @@ variable "create_operator_access_entry" {
   type        = bool
   default     = true
 }
+
+variable "create_github_runner" {
+  description = "Cria uma EC2 privada para workflows confiáveis de deploy do AutoFlow."
+  type        = bool
+  default     = false
+}
+
+variable "github_runner_instance_type" {
+  description = "Tipo da EC2 dedicada do runner."
+  type        = string
+  default     = "t3.small"
+}
+
+variable "github_runner_repository" {
+  description = "URL HTTPS do repositório autorizado a registrar o runner."
+  type        = string
+  default     = "https://github.com/BrunoSousa06/autoflow"
+
+  validation {
+    condition     = can(regex("^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", var.github_runner_repository))
+    error_message = "Informe a URL HTTPS de um único repositório GitHub."
+  }
+}
+
+variable "github_app_id" {
+  description = "ID numérico da GitHub App dedicada ao registro do runner."
+  type        = string
+  default     = ""
+}
+
+variable "github_app_installation_id" {
+  description = "ID da instalação da GitHub App no repositório AutoFlow."
+  type        = string
+  default     = ""
+}
+
+variable "github_app_private_key_secret_arn" {
+  description = "ARN do segredo Secrets Manager com a chave privada PEM da GitHub App."
+  type        = string
+  default     = ""
+}

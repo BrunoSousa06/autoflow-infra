@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y awscli curl jq python3-jwt python3-cryptography iptables
+KUBECTL_VERSION="$(curl -fsSL https://dl.k8s.io/release/stable.txt)"
+curl -fsSL "https://dl.k8s.io/release/$${KUBECTL_VERSION}/bin/linux/amd64/kubectl" -o /usr/local/bin/kubectl
+chmod 0755 /usr/local/bin/kubectl
+id runner >/dev/null 2>&1 || useradd --create-home --shell /bin/bash runner
+install -d -o runner -g runner -m 0750 /opt/actions-runner
+install -d -o root -g root -m 0700 /run/github-runner
+
+cat >/usr/local/sbin/register-github-runner <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+APP_ID='${app_id}'
+INSTALLATION_ID='${installation_id}'
+REPOSITORY='${repository}'
+KEY_SECRET='${private_key_secret}'
+RUNNER_DIR=/opt/actions-runner
+KEY_FILE=/run/github-runner/app.pem
+TOKEN_FILE=/run/github-runner/registration-token
+trap 'rm -f "$KEY_FILE" "$TOKEN_FILE"' EXIT
+
+test -n "$APP_ID" && test -n "$INSTALLATION_ID" && test -n "$KEY_SECRET"
+aws secretsmanager get-secret-value --secret-id "$KEY_SECRET" --query SecretString --output text > "$KEY_FILE"
+chmod 0600 "$KEY_FILE"
+JWT="$(python3 - "$APP_ID" "$KEY_FILE" <<'PY'
+import sys, time, jwt
+app_id, key_path = sys.argv[1:]
+with open(key_path, encoding="utf-8") as key_file:
+    print(jwt.encode({"iat": int(time.time()) - 60, "exp": int(time.time()) + 540, "iss": app_id}, key_file.read(), algorithm="RS256"))
+PY
+)"
+INSTALL_TOKEN="$(curl --fail --silent --show-error -X POST \
+  -H "Authorization: Bearer $JWT" -H 'Accept: application/vnd.github+json' \
+  -H 'X-GitHub-Api-Version: 2022-11-28' \
+  "https://api.github.com/app/installations/$INSTALLATION_ID/access_tokens" | jq -er .token)"
+REGISTRATION_TOKEN="$(curl --fail --silent --show-error -X POST \
+  -H "Authorization: Bearer $INSTALL_TOKEN" -H 'Accept: application/vnd.github+json' \
+  -H 'X-GitHub-Api-Version: 2022-11-28' \
+  "https://api.github.com/repos/$REPOSITORY/actions/runners/registration-token" | jq -er .token)"
+printf '%s' "$REGISTRATION_TOKEN" > "$TOKEN_FILE"
+unset JWT INSTALL_TOKEN REGISTRATION_TOKEN
+
+rm -f "$RUNNER_DIR/.runner" "$RUNNER_DIR/.credentials" "$RUNNER_DIR/.credentials_rsaparams"
+mkdir -p "$RUNNER_DIR/_work"
+find "$RUNNER_DIR/_work" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+su - runner -c "cd '$RUNNER_DIR' && ./config.sh --unattended --ephemeral --url 'https://github.com/$REPOSITORY' --token \"$(cat "$TOKEN_FILE")\" --name 'autoflow-github-runner' --labels 'autoflow-eks' --work '_work' --replace"
+rm -f "$TOKEN_FILE" "$KEY_FILE"
+exec su - runner -c "cd '$RUNNER_DIR' && ./run.sh"
+SCRIPT
+chmod 0750 /usr/local/sbin/register-github-runner
+
+cat >/etc/systemd/system/github-actions-runner.service <<'UNIT'
+[Unit]
+Description=GitHub Actions self-hosted runner AutoFlow
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/bin/bash -lc 'if [ ! -x /opt/actions-runner/run.sh ]; then version=$(curl -fsSL https://api.github.com/repos/actions/runner/releases/latest | jq -er .tag_name | sed "s/^v//"); curl -fsSL "https://github.com/actions/runner/releases/download/v$${version}/actions-runner-linux-x64-$${version}.tar.gz" -o /tmp/actions-runner.tar.gz; tar -xzf /tmp/actions-runner.tar.gz -C /opt/actions-runner; chown -R runner:runner /opt/actions-runner; rm -f /tmp/actions-runner.tar.gz; fi'
+ExecStartPre=/bin/bash -lc 'iptables -C OUTPUT -m owner --uid-owner runner -d 169.254.169.254/32 -j REJECT 2>/dev/null || iptables -I OUTPUT 1 -m owner --uid-owner runner -d 169.254.169.254/32 -j REJECT'
+ExecStart=/usr/local/sbin/register-github-runner
+Restart=always
+RestartSec=30
+User=root
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/opt/actions-runner /run/github-runner
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now github-actions-runner.service

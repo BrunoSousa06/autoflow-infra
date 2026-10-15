@@ -58,6 +58,11 @@ jobs:
       TF_VAR_cluster_role_arn: ${{ vars.AWS_EKS_CLUSTER_ROLE_ARN }}
       TF_VAR_node_role_arn: ${{ vars.AWS_EKS_NODE_ROLE_ARN }}
       TF_VAR_operator_access_role_arn: ${{ vars.AWS_EKS_OPERATOR_ACCESS_ROLE_ARN }}
+      TF_VAR_create_github_runner: ${{ vars.CREATE_GITHUB_RUNNER || 'false' }}
+      TF_VAR_github_runner_repository: https://github.com/BrunoSousa06/autoflow
+      TF_VAR_github_app_id: ${{ vars.RUNNER_APP_ID }}
+      TF_VAR_github_app_installation_id: ${{ vars.RUNNER_APP_INSTALLATION_ID }}
+      TF_VAR_github_app_private_key_secret_arn: ${{ vars.RUNNER_APP_KEY_SECRET_ARN }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
