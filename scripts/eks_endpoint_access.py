@@ -4,10 +4,22 @@ import argparse
 import ipaddress
 import json
 import os
+import re
 import tempfile
 import subprocess
 import sys
 import time
+
+
+PERMANENT_CIDR = "189.6.8.245/32"
+
+
+class LeaseReadError(RuntimeError):
+    """Falha classificada ao ler o lease no S3, sem propagar saída bruta do AWS CLI."""
+
+    def __init__(self, category):
+        self.category = category
+        super().__init__(f"Falha ao ler lease do S3: {category}")
 
 
 class AwsCli:
@@ -52,6 +64,7 @@ def authorize(aws, cluster, region, runner_ip, baseline):
 
 
 def cleanup(aws, cluster, region, lease):
+    lease = validate_lease(lease)
     config = cluster_config(aws, cluster, region)
     current = set(config["publicAccessCidrs"])
     target = (current - {lease["temporary_cidr"]}) | set(lease["original_cidrs"])
@@ -85,10 +98,55 @@ def load_lease():
         raise RuntimeError("EKS_LEASE_BUCKET e EKS_LEASE_KEY são obrigatórios para reconciliação")
     result = subprocess.run(["aws", "s3", "cp", f"s3://{bucket}/{key}", "-"], capture_output=True, text=True)
     if result.returncode:
-        if "404" in result.stderr or "Not Found" in result.stderr or "NoSuchKey" in result.stderr:
+        category = classify_lease_read_error(result.stderr)
+        if category == "not_found":
             return None
-        raise RuntimeError("Não foi possível ler o registro durável de lease EKS")
-    return json.loads(result.stdout)
+        raise LeaseReadError(category)
+    try:
+        return validate_lease(json.loads(result.stdout))
+    except (json.JSONDecodeError, TypeError) as error:
+        raise LeaseReadError("invalid_lease") from error
+
+
+def classify_lease_read_error(stderr):
+    message = (stderr or "").lower()
+    if "expiredtoken" in message:
+        return "expired_token"
+    if "accessdenied" in message or "(403)" in message:
+        return "access_denied"
+    if "nosuchbucket" in message:
+        return "unexpected"
+    if any(marker in message for marker in (
+        "endpointconnectionerror", "could not connect", "connection timed out",
+        "temporary failure in name resolution", "name or service not known", "ssl validation failed",
+    )):
+        return "connectivity"
+    if "nosuchkey" in message or re.search(r"\b404\b", message):
+        return "not_found"
+    return "unexpected"
+
+
+def validate_lease(lease):
+    if not isinstance(lease, dict):
+        raise LeaseReadError("invalid_lease")
+    temporary = lease.get("temporary_cidr")
+    originals = lease.get("original_cidrs")
+    if (not isinstance(temporary, str) or not isinstance(originals, list) or not originals
+            or any(not isinstance(value, str) for value in originals)):
+        raise LeaseReadError("invalid_lease")
+    try:
+        temporary_network = ipaddress.ip_network(temporary, strict=True)
+        original_networks = [ipaddress.ip_network(value, strict=True) for value in originals]
+    except (TypeError, ValueError) as error:
+        raise LeaseReadError("invalid_lease") from error
+    if temporary_network.version != 4 or temporary_network.prefixlen != 32:
+        raise LeaseReadError("invalid_lease")
+    if any(network.version != 4 or str(network) == "0.0.0.0/0" for network in original_networks):
+        raise LeaseReadError("invalid_lease")
+    normalized_originals = sorted({str(network) for network in original_networks})
+    if PERMANENT_CIDR not in normalized_originals or str(temporary_network) in normalized_originals:
+        raise LeaseReadError("invalid_lease")
+    return {"temporary_cidr": str(temporary_network), "original_cidrs": normalized_originals}
 
 
 def remove_lease():
@@ -97,9 +155,15 @@ def remove_lease():
 
 
 def reconcile(aws, cluster, region):
+    return cleanup_if_lease_exists(aws, cluster, region)
+
+
+def cleanup_if_lease_exists(aws, cluster, region):
     lease = load_lease()
-    if lease:
-        cleanup(aws, cluster, region, lease)
+    if lease is None:
+        return False
+    cleanup(aws, cluster, region, lease)
+    return True
 
 
 def main():
@@ -124,7 +188,7 @@ def main():
                 with open(args.lease, encoding="utf-8") as stream:
                     cleanup(aws, args.cluster, args.region, json.load(stream))
             else:
-                reconcile(aws, args.cluster, args.region)
+                cleanup_if_lease_exists(aws, args.cluster, args.region)
 
 
 if __name__ == "__main__":

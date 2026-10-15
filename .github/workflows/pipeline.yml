@@ -33,6 +33,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: python -m unittest discover -s scripts -p "test_verify_aws_account.py" -v
       - run: python -m unittest discover -s scripts -p "test_eks_endpoint_access.py" -v
+      - run: python -m unittest discover -s scripts -p "test_prepare_eks_access_imports.py" -v
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.16.5"
@@ -90,6 +91,10 @@ jobs:
       - name: Inicializar Terraform
         working-directory: infra
         run: terraform init -input=false -reconfigure -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+      - name: Preparar imports declarativos para recursos EKS existentes
+        env:
+          OPERATOR_ROLE_ARN: ${{ vars.AWS_EKS_OPERATOR_ACCESS_ROLE_ARN }}
+        run: python scripts/prepare_eks_access_imports.py --cluster "$EKS_CLUSTER_NAME" --principal "$OPERATOR_ROLE_ARN" --region "$AWS_REGION" --output infra/eks-access-imports.auto.tf
       - name: Gerar plan e preservar guard destrutivo
         id: plan
         working-directory: infra

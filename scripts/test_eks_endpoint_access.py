@@ -1,7 +1,15 @@
 import unittest
+import os
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from eks_endpoint_access import authorize, cleanup
+from eks_endpoint_access import (
+    LeaseReadError,
+    authorize,
+    cleanup,
+    cleanup_if_lease_exists,
+    load_lease,
+)
 
 
 class FakeAws:
@@ -111,6 +119,56 @@ class EndpointAccessTests(unittest.TestCase):
         self.assertIn("public_access_cidrs     = var.cluster_endpoint_public_access_cidrs", cluster)
         self.assertIn('cidr != "0.0.0.0/0"', cidrs_variable)
         self.assertNotIn("TF_VAR_cluster_endpoint_public_access_cidrs", workflow)
+
+    def test_missing_lease_is_successful_cleanup_without_endpoint_changes(self):
+        aws = FakeAws({"189.6.8.245/32"})
+        with patch("eks_endpoint_access.load_lease", return_value=None):
+            self.assertFalse(cleanup_if_lease_exists(aws, "eks-autoflow", "us-east-1"))
+        self.assertEqual(aws.calls, [])
+
+    def test_s3_missing_key_and_404_are_treated_as_absent_lease(self):
+        errors = (
+            "fatal error: An error occurred (NoSuchKey) when calling the HeadObject operation",
+            "fatal error: An error occurred (404) when calling the HeadObject operation: Key not found",
+        )
+        with patch.dict(os.environ, {"EKS_LEASE_BUCKET": "state-bucket", "EKS_LEASE_KEY": "ci/lease.json"}):
+            for stderr in errors:
+                with self.subTest(stderr=stderr), patch("eks_endpoint_access.subprocess.run", return_value=SimpleNamespace(returncode=1, stderr=stderr, stdout="")):
+                    self.assertIsNone(load_lease())
+
+    def test_s3_auth_permission_connectivity_and_unexpected_errors_are_distinguished(self):
+        errors = {
+            "ExpiredToken": "An error occurred (ExpiredToken) when calling HeadObject",
+            "AccessDenied": "An error occurred (AccessDenied) when calling HeadObject",
+            "connectivity": "Could not connect to the endpoint URL: https://s3.invalid",
+            "missing_bucket": "An error occurred (NoSuchBucket) when calling HeadObject",
+            "unexpected": "An error occurred (ServiceUnavailable) when calling HeadObject",
+        }
+        with patch.dict(os.environ, {"EKS_LEASE_BUCKET": "state-bucket", "EKS_LEASE_KEY": "ci/lease.json"}):
+            for category, stderr in errors.items():
+                with self.subTest(category=category), patch("eks_endpoint_access.subprocess.run", return_value=SimpleNamespace(returncode=1, stderr=stderr, stdout="")):
+                    with self.assertRaises(LeaseReadError) as raised:
+                        load_lease()
+                    self.assertEqual(raised.exception.category, {
+                        "ExpiredToken": "expired_token",
+                        "AccessDenied": "access_denied",
+                        "connectivity": "connectivity",
+                        "missing_bucket": "unexpected",
+                        "unexpected": "unexpected",
+                    }[category])
+                    self.assertNotIn(stderr, str(raised.exception))
+
+    def test_untrusted_lease_never_reads_or_updates_cluster_cidrs(self):
+        aws = FakeAws({"189.6.8.245/32", "198.51.100.7/32"})
+        invalid_leases = (
+            {"temporary_cidr": "189.6.8.245/32", "original_cidrs": ["189.6.8.245/32"]},
+            {"temporary_cidr": "198.51.100.7/32", "original_cidrs": ["203.0.113.1/32"]},
+            {"temporary_cidr": "invalid", "original_cidrs": ["189.6.8.245/32"]},
+        )
+        for lease in invalid_leases:
+            with self.subTest(lease=lease), self.assertRaises(LeaseReadError):
+                cleanup(aws, "eks-autoflow", "us-east-1", lease)
+        self.assertEqual(aws.calls, [])
 
 
 if __name__ == "__main__":
