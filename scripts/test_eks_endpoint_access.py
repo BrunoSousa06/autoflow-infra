@@ -99,6 +99,19 @@ class EndpointAccessTests(unittest.TestCase):
         self.assertNotIn("backend-deployment", apply)
         self.assertNotIn("frontend-deployment", apply)
 
+    def test_terraform_keeps_permanent_cidr_and_ignores_temporary_lease_drift(self):
+        from pathlib import Path
+        root = Path(__file__).parents[1]
+        variables = (root / "infra/vars.tf").read_text(encoding="utf-8")
+        cluster = (root / "infra/eks-cluster.tf").read_text(encoding="utf-8")
+        workflow = (root / ".github/workflows/pipeline.yml").read_text(encoding="utf-8")
+        cidrs_variable = variables.split('variable "cluster_endpoint_public_access_cidrs"', 1)[1].split("\n}", 1)[0]
+        self.assertIn('default     = ["189.6.8.245/32"]', cidrs_variable)
+        self.assertIn("ignore_changes = [vpc_config[0].public_access_cidrs]", cluster)
+        self.assertIn("public_access_cidrs     = var.cluster_endpoint_public_access_cidrs", cluster)
+        self.assertIn('cidr != "0.0.0.0/0"', cidrs_variable)
+        self.assertNotIn("TF_VAR_cluster_endpoint_public_access_cidrs", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

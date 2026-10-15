@@ -16,4 +16,9 @@ resource "aws_eks_cluster" "autoflow" {
     endpoint_public_access  = var.cluster_endpoint_public_access
     public_access_cidrs     = var.cluster_endpoint_public_access_cidrs
   }
+
+  lifecycle {
+    # A pipeline gerencia CIDRs efêmeros; Terraform não deve revertê-los entre Plan e Apply.
+    ignore_changes = [vpc_config[0].public_access_cidrs]
+  }
 }

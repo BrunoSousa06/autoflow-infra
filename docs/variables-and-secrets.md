@@ -44,7 +44,7 @@ Secrets e variables consumidos tanto pelo Plan quanto pelo Apply devem existir c
 | `instance_type` | Opcional; `t3.medium` | Tipo de instância node. |
 | `node_min_size`, `node_desired_size`, `node_max_size` | Opcionais; `2`, `2`, `3` | Tamanho node group. |
 | `cluster_endpoint_private_access`, `cluster_endpoint_public_access` | Opcionais; `true`, `true` | Acesso endpoint EKS. |
-| `cluster_endpoint_public_access_cidrs` | Opcional; `[]`; validação exige CIDR se endpoint público habilitado | Allowlist endpoint. |
+| `cluster_endpoint_public_access_cidrs` | Opcional; default `189.6.8.245/32`; validação exige CIDR se endpoint público habilitado | CIDR permanente inicial do endpoint. Terraform ignora drift nesse atributo; o workflow gerencia o `/32` temporário do runner e preserva os CIDRs preexistentes ao limpar o lease. |
 | `create_nat_gateway`, `create_operator_access_entry` | Opcionais; `true`, `true` | Controlam criação de recursos. |
 
 ### Root API Gateway (`infra/api-gateway/variables.tf`)

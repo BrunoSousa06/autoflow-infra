@@ -6,7 +6,7 @@ O workflow de VPC/EKS usa `ubuntu-latest` tanto no Plan quanto no Apply. O root 
 
 Antes de executar Terraform, o workflow consulta o IP IPv4 de saída real do job e adiciona somente esse endereço como `/32` à allowlist pública de `eks-autoflow` em `us-east-1`. A atualização é consultada até terminar antes de prosseguir. O script captura e preserva a lista atual, incluindo `189.6.8.245/32`, e remove o CIDR temporário em etapa `always()` após Plan ou Apply. A concorrência do workflow é serializada sem cancelar uma execução em andamento.
 
-O endpoint privado permanece habilitado. O endereço do runner é temporário e pode variar entre execuções. Um lease durável é gravado no S3 antes da alteração; se a execução for cancelada antes do cleanup, o próximo Plan/Apply reconcilia o lease anterior antes de criar outro. O endpoint não admite `0.0.0.0/0`.
+O endpoint privado permanece habilitado. O CIDR permanente inicial está definido em `cluster_endpoint_public_access_cidrs` como `189.6.8.245/32`; Terraform ignora alterações externas somente nesse atributo para não reverter leases temporários. O endereço do runner é temporário e pode variar entre execuções. Um lease durável é gravado no S3 antes da alteração; se a execução for cancelada antes do cleanup, o próximo Plan/Apply reconcilia o lease anterior antes de criar outro. O endpoint não admite `0.0.0.0/0`.
 
 ## Plan, aprovação e Apply
 
