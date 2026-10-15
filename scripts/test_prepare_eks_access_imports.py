@@ -1,0 +1,48 @@
+import unittest
+from unittest.mock import patch
+
+import prepare_eks_access_imports as imports
+
+
+class AccessImportTests(unittest.TestCase):
+    def discover(self, state, entry=True, association=True):
+        with patch.object(imports, "access_entry_exists", return_value=entry), patch.object(
+            imports, "run_json", return_value={"associatedAccessPolicies": ([{"policyArn": imports.POLICY_ARN}] if association else [])}
+        ):
+            return imports.discover_imports([], set(state), "cluster", "arn:role", "us-east-1")
+
+    def test_a_imports_both_existing_resources_missing_from_state(self):
+        self.assertEqual(len(self.discover(set())), 2)
+
+    def test_b_creates_resources_when_neither_exists(self):
+        self.assertEqual(self.discover(set(), entry=False, association=False), [])
+
+    def test_c_does_not_import_resources_already_in_state(self):
+        self.assertEqual(self.discover({imports.ENTRY_ADDRESS, imports.ASSOCIATION_ADDRESS}), [])
+
+    def test_d_imports_entry_and_creates_missing_association(self):
+        actual = self.discover(set(), association=False)
+        self.assertEqual(actual, [(imports.ENTRY_ADDRESS, "cluster:arn:role")])
+
+    def test_e_imports_only_resource_missing_from_state(self):
+        actual = self.discover({imports.ENTRY_ADDRESS})
+        self.assertEqual(actual, [(imports.ASSOCIATION_ADDRESS,
+                                  f"cluster#arn:role#{imports.POLICY_ARN}")])
+
+    def test_e_imports_entry_when_only_association_is_already_in_state(self):
+        actual = self.discover({imports.ASSOCIATION_ADDRESS})
+        self.assertEqual(actual, [(imports.ENTRY_ADDRESS, "cluster:arn:role")])
+
+    def test_f_generated_configuration_has_no_historical_resource_identifiers(self):
+        self.assertEqual(imports.render_imports(self.discover(set(), entry=False, association=False)), "")
+
+    def test_non_not_found_aws_error_fails_closed(self):
+        with patch("subprocess.run", return_value=type("Result", (), {
+            "returncode": 1, "stderr": "ExpiredTokenException"
+        })()):
+            with self.assertRaisesRegex(RuntimeError, "credenciais e permissões"):
+                imports.access_entry_exists(["aws"], "cluster", "arn:role", "us-east-1")
+
+
+if __name__ == "__main__":
+    unittest.main()
