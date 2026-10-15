@@ -74,10 +74,30 @@ class EndpointAccessTests(unittest.TestCase):
         self.assertIn("group: autoflow-eks-endpoint-deploy", content)
         self.assertIn("cancel-in-progress: false", content)
         plan = content.split("  plan:", 1)[1].split("  apply:", 1)[0]
-        apply = content.split("  apply:", 1)[1]
+        apply = content.split("\n  apply:\n", 1)[1]
         self.assertNotIn("environment:", plan)
         self.assertIn("environment: homolog", apply)
         self.assertIn("required_reviewers", apply)
+
+    def test_develop_push_plans_and_applies_only_after_environment_approval(self):
+        from pathlib import Path
+        workflow = Path(__file__).parents[1] / ".github/workflows/pipeline.yml"
+        content = workflow.read_text(encoding="utf-8")
+        plan = content.split("  plan:", 1)[1].split("  apply:", 1)[0]
+        apply = content.split("\n  apply:\n", 1)[1]
+        self.assertIn("if: github.ref == 'refs/heads/develop' && (github.event_name == 'push'", plan)
+        self.assertIn("ALLOW_DESTRUCTIVE: ${{ inputs.allow_destructive || 'false' }}", plan)
+        self.assertIn("github.event_name == 'push'", apply)
+        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.apply", apply)
+        self.assertIn("environment: homolog", apply)
+        self.assertIn("needs: plan", apply)
+        self.assertIn("infra-tfplan-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}", apply)
+        self.assertIn("terraform apply -input=false infra.tfplan", apply)
+        self.assertNotIn("terraform plan", apply)
+        self.assertIn("ALLOW_DESTRUCTIVE: ${{ inputs.allow_destructive || 'false' }}", apply)
+        self.assertNotIn("kubectl rollout status", apply)
+        self.assertNotIn("backend-deployment", apply)
+        self.assertNotIn("frontend-deployment", apply)
 
 
 if __name__ == "__main__":
