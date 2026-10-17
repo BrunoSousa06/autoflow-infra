@@ -59,6 +59,14 @@ class EndpointAccessTests(unittest.TestCase):
             authorize(aws, "eks-autoflow", "us-east-1", "198.51.100.7", ["189.6.8.245/32"])
         self.assertFalse(any(c[1] == "update-cluster-config" for c in aws.calls))
 
+    def test_missing_cluster_skips_authorization_but_aws_errors_fail(self):
+        from eks_endpoint_access import cluster_config
+        missing = __import__("subprocess").CalledProcessError(1, "aws", stderr="ResourceNotFoundException: cluster not found")
+        self.assertIsNone(cluster_config(lambda *_: (_ for _ in ()).throw(missing), "eks-autoflow", "us-east-1"))
+        error = __import__("subprocess").CalledProcessError(1, "aws", stderr="AccessDeniedException")
+        with self.assertRaises(__import__("subprocess").CalledProcessError):
+            cluster_config(lambda *_: (_ for _ in ()).throw(error), "eks-autoflow", "us-east-1")
+
     def test_failure_does_not_change_cidrs(self):
         aws = FakeAws({"189.6.8.245/32"})
         aws.fail_update = True
@@ -94,7 +102,9 @@ class EndpointAccessTests(unittest.TestCase):
         plan = content.split("  plan:", 1)[1].split("  apply:", 1)[0]
         apply = content.split("\n  apply:\n", 1)[1]
         self.assertIn("if: github.ref == 'refs/heads/develop' && (github.event_name == 'push'", plan)
-        self.assertIn("ALLOW_DESTRUCTIVE: ${{ inputs.allow_destructive || 'false' }}", plan)
+        self.assertIn("ALLOW_DESTRUCTIVE: 'false'", plan)
+        self.assertIn("default: true", content.split("approve_state_bucket_creation:", 1)[1].split("permissions:", 1)[0])
+        self.assertIn("inputs.approve_state_bucket_creation || 'true'", plan)
         self.assertIn("github.event_name == 'push'", apply)
         self.assertIn("github.event_name == 'workflow_dispatch' && inputs.apply", apply)
         self.assertIn("environment: homolog", apply)
@@ -102,7 +112,8 @@ class EndpointAccessTests(unittest.TestCase):
         self.assertIn("infra-tfplan-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}", apply)
         self.assertIn("terraform apply -input=false infra.tfplan", apply)
         self.assertNotIn("terraform plan", apply)
-        self.assertIn("ALLOW_DESTRUCTIVE: ${{ inputs.allow_destructive || 'false' }}", apply)
+        self.assertIn("ALLOW_DESTRUCTIVE: 'false'", apply)
+        self.assertIn("sys.exit(bool(changes))", plan)
         self.assertNotIn("kubectl rollout status", apply)
         self.assertNotIn("backend-deployment", apply)
         self.assertNotIn("frontend-deployment", apply)
