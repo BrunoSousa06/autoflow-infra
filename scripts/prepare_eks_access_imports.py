@@ -2,6 +2,8 @@
 
 import argparse
 import json
+import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -61,9 +63,22 @@ def state_addresses():
                                capture_output=True, text=True)
     except subprocess.CalledProcessError as error:
         output = "\n".join((error.stdout or "", error.stderr or "")).lower()
-        if any(line.strip() in {"no state file was found", "no state file was found!"}
-               for line in output.splitlines()):
+        output = re.sub(r"\x1b\[[0-9;]*m", "", output)
+        if "no state file was found" in output or "no state found" in output:
             return set()
+        bucket = os.environ.get("TF_STATE_BUCKET")
+        key = os.environ.get("TF_STATE_KEY")
+        if bucket and key:
+            try:
+                subprocess.run(["aws", "s3api", "head-object", "--bucket", bucket, "--key", key],
+                               check=True, capture_output=True, text=True)
+            except subprocess.CalledProcessError as state_error:
+                state_output = "\n".join((state_error.stdout or "", state_error.stderr or "")).lower()
+                if "nosuchkey" in state_output or re.search(r"\b404\b", state_output):
+                    return set()
+                raise RuntimeError(
+                    "Falha ao verificar a ausência do Terraform State no S3; verifique credenciais e permissões"
+                ) from state_error
         raise RuntimeError(
             "Falha ao consultar Terraform State; verifique validade das credenciais AWS e acesso ao bucket de State"
         ) from error

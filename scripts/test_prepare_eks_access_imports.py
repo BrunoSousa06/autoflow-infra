@@ -1,4 +1,5 @@
 import unittest
+import subprocess
 from unittest.mock import patch
 
 import prepare_eks_access_imports as imports
@@ -49,6 +50,21 @@ class AccessImportTests(unittest.TestCase):
         )
         with patch("prepare_eks_access_imports.subprocess.run", side_effect=error):
             self.assertEqual(imports.state_addresses(), set())
+
+    def test_missing_state_is_detected_from_s3_when_terraform_error_differs(self):
+        terraform_error = subprocess.CalledProcessError(1, "terraform state list", stderr="backend returned empty state")
+        missing_object = subprocess.CalledProcessError(1, "aws s3api head-object", stderr="An error occurred (NoSuchKey) 404")
+        with patch.dict("os.environ", {"TF_STATE_BUCKET": "state-bucket", "TF_STATE_KEY": "eks/state"}), \
+                patch("prepare_eks_access_imports.subprocess.run", side_effect=[terraform_error, missing_object]):
+            self.assertEqual(imports.state_addresses(), set())
+
+    def test_s3_permission_failure_is_not_misclassified_as_missing_state(self):
+        terraform_error = subprocess.CalledProcessError(1, "terraform state list", stderr="backend failed")
+        access_error = subprocess.CalledProcessError(1, "aws s3api head-object", stderr="AccessDenied")
+        with patch.dict("os.environ", {"TF_STATE_BUCKET": "state-bucket", "TF_STATE_KEY": "eks/state"}), \
+                patch("prepare_eks_access_imports.subprocess.run", side_effect=[terraform_error, access_error]):
+            with self.assertRaisesRegex(RuntimeError, "ausência do Terraform State no S3"):
+                imports.state_addresses()
 
     def test_terraform_state_access_errors_still_fail_closed(self):
         error = __import__("subprocess").CalledProcessError(
