@@ -30,6 +30,11 @@ class GatewayRoutesTest(unittest.TestCase):
             actual.update((method, path) for method in re.findall(r'"([A-Z]+)"', methods))
         self.assertEqual(expected, actual)
 
+    def test_remote_eks_state_absence_is_diagnosed_against_cluster(self):
+        workflow = (ROOT / ".github/workflows/api-gateway.yml").read_text(encoding="utf-8")
+        self.assertEqual(workflow.count("state_resource_guard.py --bucket \"$TF_VAR_terraform_state_bucket\" --key \"$TF_VAR_infra_state_key\""), 2)
+        self.assertNotIn('head-object --bucket "$TF_VAR_terraform_state_bucket" --key "$TF_VAR_infra_state_key"', workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
