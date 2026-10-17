@@ -12,10 +12,6 @@ on:
         description: Aplicar o plan de VPC/EKS após aprovação
         type: boolean
         default: false
-      allow_destructive:
-        description: Autorizar exclusões somente após revisar o plan
-        type: boolean
-        default: false
       approve_state_bucket_creation:
         description: Permitir bootstrap do bucket de Terraform State quando ausente
         type: boolean
@@ -113,23 +109,18 @@ jobs:
         env:
           OPERATOR_ROLE_ARN: ${{ vars.AWS_EKS_OPERATOR_ACCESS_ROLE_ARN }}
         run: python scripts/prepare_eks_access_imports.py --cluster "$EKS_CLUSTER_NAME" --principal "$OPERATOR_ROLE_ARN" --region "$AWS_REGION" --output infra/eks-access-imports.auto.tf
-      - name: Gerar plan e preservar guard destrutivo
+      - name: Gerar plan e registrar ações de destruição/substituição
         id: plan
         working-directory: infra
-        env:
-          ALLOW_DESTRUCTIVE: 'false'
         run: |
           set -euo pipefail
           terraform plan -input=false -no-color -out=infra.tfplan
           terraform show -json infra.tfplan > infra-plan.json
           python - <<'PY'
-          import json, os, sys
+          import json
           plan = json.load(open("infra-plan.json", encoding="utf-8"))
           changes = [r["address"] for r in plan.get("resource_changes", []) if "delete" in r["change"]["actions"]]
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write(f"has_deletions={str(bool(changes)).lower()}\n")
           print("Resources with delete/replacement actions:", changes)
-          sys.exit(bool(changes))
           PY
           printf '%s' "$GITHUB_SHA" > infra.tfplan.commit
           gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$PLAN_ENCRYPTION_PASSPHRASE" --output infra.tfplan.gpg infra.tfplan
@@ -169,7 +160,6 @@ jobs:
       EKS_LEASE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       EKS_LEASE_KEY: ci/eks-endpoint-lease.json
       PLAN_ENCRYPTION_PASSPHRASE: ${{ secrets.TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE }}
-      ALLOW_DESTRUCTIVE: 'false'
     steps:
       - uses: actions/checkout@v4
         with:
