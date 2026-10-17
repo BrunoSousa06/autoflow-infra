@@ -53,9 +53,17 @@ class ReviewGatewayPlanTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "escopo autorizado"):
             review(plan_with_action(["delete"]), "123456789012")
 
+    def test_destruicao_autorizada_passou_do_guard_de_acoes(self):
+        with self.assertRaisesRegex(RuntimeError, "152 criações"):
+            review(plan_with_action(["delete"]), "123456789012", allow_destructive=True)
+
     def test_substituicao_nao_autorizada_reprovada(self):
         with self.assertRaisesRegex(RuntimeError, "escopo autorizado"):
             review(plan_with_action(["delete", "create"]), "123456789012")
+
+    def test_substituicao_autorizada_passou_do_guard_de_acoes(self):
+        with self.assertRaisesRegex(RuntimeError, "152 criações"):
+            review(plan_with_action(["delete", "create"]), "123456789012", allow_destructive=True)
 
     def test_json_invalido_ou_incompleto_reprovado(self):
         for invalid_plan in (None, {}, {"resource_changes": None},
