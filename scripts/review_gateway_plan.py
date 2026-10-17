@@ -31,12 +31,24 @@ def review(plan, expected_account, allow_destructive=False):
         valid_actions = (["no-op"], ["read"])
         if allow_destructive:
             valid_actions = (*valid_actions, ["delete", "create"], ["create", "delete"])
-        if (item["address"] != VPC_LINK_ADDRESS
-                or item.get("type") != "aws_apigatewayv2_vpc_link"
-                or actions not in valid_actions
-                or not isinstance(importing.get("id"), str)
-                or not VPC_LINK_ID_PATTERN.fullmatch(importing["id"])):
-            raise RuntimeError("O plan contém import fora do VPC Link esperado ou com alterações pendentes.")
+        import_id = importing.get("id")
+        failures = []
+        if item["address"] != VPC_LINK_ADDRESS:
+            failures.append("address fora do VPC Link esperado")
+        if item.get("type") != "aws_apigatewayv2_vpc_link":
+            failures.append("type diferente de aws_apigatewayv2_vpc_link")
+        if actions not in valid_actions:
+            failures.append("actions não permitidas para import")
+        if not isinstance(import_id, str) or not VPC_LINK_ID_PATTERN.fullmatch(import_id):
+            failures.append("importing.id ausente ou inválido")
+        if failures:
+            # O ID do recurso e os valores before/after são deliberadamente omitidos.
+            raise RuntimeError(
+                "Import do VPC Link rejeitado: " + "; ".join(failures)
+                + f". address={item['address']!r}, type={item.get('type')!r}, "
+                + f"actions={actions!r}, importing.id={'válido' if isinstance(import_id, str) and VPC_LINK_ID_PATTERN.fullmatch(import_id) else 'inválido/ausente'}, "
+                + f"ALLOW_DESTRUCTIVE={'true' if allow_destructive else 'false'}."
+            )
 
     # Import declarativo sem alterações não é uma operação AWS; import + replace
     # permanece nas mudanças para passar pelas mesmas validações de recursos.
