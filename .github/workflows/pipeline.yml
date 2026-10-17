@@ -107,7 +107,6 @@ jobs:
           AWS_TF_STATE_KEY_INFRA: ${{ vars.AWS_TF_STATE_KEY_INFRA }}
         run: |
           python scripts/state_resource_guard.py --bucket "$AWS_TERRAFORM_STATE_BUCKET" --key "$AWS_TF_STATE_KEY_INFRA" -- aws eks describe-cluster --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --query cluster.name --output text
-          python scripts/state_resource_guard.py --bucket "$AWS_TERRAFORM_STATE_BUCKET" --key "$AWS_TF_STATE_KEY_INFRA" -- aws ec2 describe-vpcs --region "$AWS_REGION" --filters Name=tag:Name,Values=main-vpc --query 'Vpcs[0].VpcId' --output text
           cd infra
           terraform init -input=false -reconfigure -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
       - name: Preparar imports declarativos para recursos EKS existentes

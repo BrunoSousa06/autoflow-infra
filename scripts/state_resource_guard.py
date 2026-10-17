@@ -34,7 +34,11 @@ def check(bucket, key, command):
     if aws_state_present(bucket, key):
         return "state-present"
     if resource_present(command):
-        raise RuntimeError(f"State {key} ausente, mas o recurso consultado já existe. Apply bloqueado; restaurar o State ou importar/reconciliar após revisão.")
+        resource_query = " ".join(command[:3])
+        raise RuntimeError(
+            f"State {key} ausente, mas a consulta '{resource_query}' encontrou recurso existente. "
+            "Apply bloqueado; restaurar o State ou importar/reconciliar após revisão."
+        )
     return "state-and-resource-absent"
 
 
