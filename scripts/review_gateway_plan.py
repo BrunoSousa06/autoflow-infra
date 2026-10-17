@@ -8,7 +8,7 @@ import sys
 ALLOWED_METHODS = {"GET", "POST", "PATCH", "DELETE"}
 
 
-def review(plan, expected_account):
+def review(plan, expected_account, allow_destructive=False):
     if not isinstance(plan, dict) or not isinstance(plan.get("resource_changes"), list):
         raise RuntimeError("JSON do plan inválido ou incompleto: resource_changes ausente ou inválido.")
 
@@ -42,11 +42,15 @@ def review(plan, expected_account):
         print(f"Plan aprovado na revisão estática: sem alterações AWS; imports declarativos={len(imports)}.")
         return
     expected_creates = 152 - len(imports)
-    if (len(changes) != expected_creates
-            or any(item["change"]["actions"] != ["create"] for item in changes)):
+    allowed_actions = (["create"],)
+    if allow_destructive:
+        allowed_actions = (*allowed_actions, ["delete"], ["delete", "create"])
+    create_count = sum("create" in item["change"]["actions"] for item in changes)
+    if (create_count != expected_creates
+            or any(item["change"]["actions"] not in allowed_actions for item in changes)):
         raise RuntimeError(
             f"O plan não corresponde ao escopo autorizado: {expected_creates} criações, "
-            "imports declarativos esperados e nenhuma atualização/exclusão."
+            "imports declarativos esperados e ações destrutivas somente com autorização explícita."
         )
 
     resources = {item["address"]: item["change"].get("after") or {} for item in changes}
@@ -147,4 +151,8 @@ if __name__ == "__main__":
     if len(sys.argv) != 2 or not os.getenv("TF_VAR_expected_account_id"):
         raise SystemExit("Uso: definir TF_VAR_expected_account_id e executar review_gateway_plan.py <arquivo.tfplan>")
     result = subprocess.run(["terraform", "show", "-json", sys.argv[1]], capture_output=True, text=True, check=True)
-    review(json.loads(result.stdout), os.environ["TF_VAR_expected_account_id"])
+    review(
+        json.loads(result.stdout),
+        os.environ["TF_VAR_expected_account_id"],
+        allow_destructive=os.environ.get("ALLOW_DESTRUCTIVE") == "true",
+    )
