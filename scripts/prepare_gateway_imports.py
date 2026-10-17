@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -43,7 +44,7 @@ def discover_imports(addresses, links, expected_name):
     if not matching:
         return []
     link_id = matching[0].get("VpcLinkId")
-    if not isinstance(link_id, str) or not link_id.startswith("vpclink-"):
+    if not isinstance(link_id, str) or re.fullmatch(r"[A-Za-z0-9_-]+", link_id) is None:
         raise RuntimeError("AWS retornou VPC Link sem identificador válido; import bloqueado.")
     return [(VPC_LINK_ADDRESS, link_id)]
 

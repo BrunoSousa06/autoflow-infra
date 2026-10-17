@@ -7,14 +7,14 @@ import prepare_gateway_imports as gateway_imports
 
 class GatewayImportTests(unittest.TestCase):
     def test_imports_existing_vpc_link_missing_from_gateway_state(self):
-        links = [{"Name": "autoflow-homolog", "VpcLinkId": "vpclink-123456"}]
+        links = [{"Name": "autoflow-homolog", "VpcLinkId": "a1b2c3d4"}]
         self.assertEqual(
             gateway_imports.discover_imports(set(), links, "autoflow-homolog"),
-            [(gateway_imports.VPC_LINK_ADDRESS, "vpclink-123456")],
+            [(gateway_imports.VPC_LINK_ADDRESS, "a1b2c3d4")],
         )
 
     def test_does_not_import_vpc_link_already_in_state(self):
-        links = [{"Name": "autoflow-homolog", "VpcLinkId": "vpclink-123456"}]
+        links = [{"Name": "autoflow-homolog", "VpcLinkId": "a1b2c3d4"}]
         self.assertEqual(
             gateway_imports.discover_imports({gateway_imports.VPC_LINK_ADDRESS}, links, "autoflow-homolog"),
             [],
@@ -27,17 +27,17 @@ class GatewayImportTests(unittest.TestCase):
         for links in (
             [{"Name": "autoflow-homolog", "VpcLinkId": "vpclink-1"},
              {"Name": "autoflow-homolog", "VpcLinkId": "vpclink-2"}],
-            [{"Name": "autoflow-homolog", "VpcLinkId": "invalid"}],
+            [{"Name": "autoflow-homolog", "VpcLinkId": "not a valid id"}],
         ):
             with self.subTest(links=links), self.assertRaises(RuntimeError):
                 gateway_imports.discover_imports(set(), links, "autoflow-homolog")
 
     def test_renders_declarative_vpc_link_import(self):
         actual = gateway_imports.render_imports([
-            (gateway_imports.VPC_LINK_ADDRESS, "vpclink-123456")
+            (gateway_imports.VPC_LINK_ADDRESS, "a1b2c3d4")
         ])
         self.assertIn(f"to = {gateway_imports.VPC_LINK_ADDRESS}", actual)
-        self.assertIn('id = "vpclink-123456"', actual)
+        self.assertIn('id = "a1b2c3d4"', actual)
 
     def test_state_list_failure_with_missing_s3_object_means_empty_state(self):
         terraform_error = subprocess.CalledProcessError(1, "terraform state list", stderr="backend failed")
