@@ -10,6 +10,15 @@ APP = Path(os.environ.get("AUTOFLOW_REPO", str(ROOT.parent / "autoflow")))
 
 
 class GatewayRoutesTest(unittest.TestCase):
+    def test_manual_dispatch_runs_plan_and_approved_apply_on_develop(self):
+        workflow = (ROOT / ".github/workflows/api-gateway.yml").read_text(encoding="utf-8")
+        condition = "github.ref == 'refs/heads/develop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')"
+        plan, apply = workflow.split("  plan:", 1)[1].split("  apply:", 1)[0], workflow.split("  apply:", 1)[1]
+        self.assertIn(condition, plan)
+        self.assertIn(condition, apply)
+        self.assertIn("environment: homolog", apply)
+        self.assertIn("required_reviewers", apply)
+
     def test_allowlist_corresponde_aos_controllers(self):
         controllers = list((APP / "backend/src/main/java/com/autoflow/presentation").rglob("*Controller.java"))
         self.assertTrue(controllers, "Disponibilize autoflow em AUTOFLOW_REPO")
