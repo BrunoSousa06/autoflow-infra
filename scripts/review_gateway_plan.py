@@ -21,20 +21,33 @@ def review(plan, expected_account):
                 or not all(isinstance(action, str) for action in item["change"]["actions"])):
             raise RuntimeError("JSON do plan inválido ou incompleto: resource_changes malformado.")
 
-    # Apenas resource_changes descreve as ações deste plan. Recursos presentes em
-    # prior_state/planned_values representam inventário, não criações pendentes.
+    imports = [item for item in resource_changes if item["change"].get("importing") is not None]
+    for item in imports:
+        importing = item["change"].get("importing") or {}
+        if (item["address"] != 'module.private_eks.aws_apigatewayv2_vpc_link.this'
+                or item.get("type") != "aws_apigatewayv2_vpc_link"
+                or item["change"]["actions"] != ["no-op"]
+                or not str(importing.get("id", "")).startswith("vpclink-")):
+            raise RuntimeError("O plan contém import fora do VPC Link esperado ou com alterações pendentes.")
+
+    # Import declarativo do VPC Link não é uma criação/alteração AWS.
     changes = [item for item in resource_changes
-               if item["change"]["actions"] not in (["no-op"], ["read"])]
+               if item not in imports and item["change"]["actions"] not in (["no-op"], ["read"])]
     counts = {}
     for item in changes:
         action = ",".join(item["change"]["actions"])
         counts[action] = counts.get(action, 0) + 1
     print("Ações planejadas:", json.dumps(counts, sort_keys=True))
     if not changes:
-        print("Plan aprovado na revisão estática: nenhuma alteração planejada.")
+        print(f"Plan aprovado na revisão estática: sem alterações AWS; imports declarativos={len(imports)}.")
         return
-    if len(changes) != 152 or any(item["change"]["actions"] != ["create"] for item in changes):
-        raise RuntimeError("O plan não corresponde ao escopo autorizado: 152 criações e nenhuma atualização/exclusão.")
+    expected_creates = 152 - len(imports)
+    if (len(changes) != expected_creates
+            or any(item["change"]["actions"] != ["create"] for item in changes)):
+        raise RuntimeError(
+            f"O plan não corresponde ao escopo autorizado: {expected_creates} criações, "
+            "imports declarativos esperados e nenhuma atualização/exclusão."
+        )
 
     resources = {item["address"]: item["change"].get("after") or {} for item in changes}
     required = {
@@ -127,7 +140,7 @@ def review(plan, expected_account):
     if any(term in log_format.lower() for term in ("authorization", "token", "query", "path", "sourceip", "body")):
         raise RuntimeError("Access logs podem registrar dados pessoais, tokens ou query strings.")
 
-    print("Plan aprovado na revisão estática: 152 criações; somente ALB interno, SGs restritos, VPC Link e rotas/integrations definidas.")
+    print(f"Plan aprovado na revisão estática: {expected_creates} criações e {len(imports)} imports declarativos; somente ALB interno, SGs restritos, VPC Link e rotas/integrations definidas.")
 
 
 if __name__ == "__main__":
