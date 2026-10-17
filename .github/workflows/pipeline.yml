@@ -16,6 +16,11 @@ on:
         description: Permitir bootstrap do bucket de Terraform State quando ausente
         type: boolean
         default: true
+      allow_destructive:
+        description: Autorizar exclusões/substituições após revisar o plan
+        type: boolean
+        required: true
+        default: false
 
 permissions:
   contents: read
@@ -35,6 +40,7 @@ jobs:
       - run: python -m unittest discover -s scripts -p "test_eks_endpoint_access.py" -v
       - run: python -m unittest discover -s scripts -p "test_prepare_eks_access_imports.py" -v
       - run: python -m unittest discover -s scripts -p "test_state_resource_guard.py" -v
+      - run: python -m unittest discover -s scripts -p "test_review_eks_plan.py" -v
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.16.5"
@@ -60,6 +66,7 @@ jobs:
       EKS_CLUSTER_NAME: eks-autoflow
       EKS_LEASE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       EKS_LEASE_KEY: ci/eks-endpoint-lease.json
+      ALLOW_DESTRUCTIVE: ${{ github.event_name == 'push' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false') }}
       PLAN_ENCRYPTION_PASSPHRASE: ${{ secrets.TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE }}
     steps:
       - uses: actions/checkout@v4
@@ -116,12 +123,7 @@ jobs:
           set -euo pipefail
           terraform plan -input=false -no-color -out=infra.tfplan
           terraform show -json infra.tfplan > infra-plan.json
-          python - <<'PY'
-          import json
-          plan = json.load(open("infra-plan.json", encoding="utf-8"))
-          changes = [r["address"] for r in plan.get("resource_changes", []) if "delete" in r["change"]["actions"]]
-          print("Resources with delete/replacement actions:", changes)
-          PY
+          python ../scripts/review_eks_plan.py infra-plan.json --allow-destructive "$ALLOW_DESTRUCTIVE"
           printf '%s' "$GITHUB_SHA" > infra.tfplan.commit
           gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$PLAN_ENCRYPTION_PASSPHRASE" --output infra.tfplan.gpg infra.tfplan
           sha256sum infra.tfplan.gpg infra.tfplan.commit > infra.tfplan.sha256
@@ -159,24 +161,31 @@ jobs:
       TF_VAR_operator_access_role_arn: ${{ vars.AWS_EKS_OPERATOR_ACCESS_ROLE_ARN }}
       EKS_LEASE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       EKS_LEASE_KEY: ci/eks-endpoint-lease.json
+      ALLOW_DESTRUCTIVE: ${{ github.event_name == 'push' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false') }}
       PLAN_ENCRYPTION_PASSPHRASE: ${{ secrets.TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
+      - name: Exigir Required reviewers efetivos no environment homolog
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVAL_CONFIGURED: ${{ vars.TERRAFORM_APPLY_APPROVAL_CONFIGURED }}
+        run: |
+          set -euo pipefail
+          test "$APPROVAL_CONFIGURED" = true
+          REVIEWERS=$(gh api "repos/$GITHUB_REPOSITORY/environments/homolog" --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length')
+          test "$REVIEWERS" -gt 0
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
-      - name: Exigir aprovação real do environment homolog
+      - name: Validar identidade da conta AWS para Apply
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          REVIEWERS=$(gh api "repos/$GITHUB_REPOSITORY/environments/homolog" --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length')
-          test "$REVIEWERS" -gt 0
+          AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
+        run: python scripts/verify_aws_account.py
       - name: Autorizar IP deste runner para Apply
         id: runner
         run: |
@@ -201,6 +210,9 @@ jobs:
           test "$(cat infra.tfplan.commit)" = "$GITHUB_SHA"
           sha256sum --check infra.tfplan.sha256
           gpg --batch --yes --decrypt --passphrase "$PLAN_ENCRYPTION_PASSPHRASE" --output infra.tfplan infra.tfplan.gpg
+          terraform show -json infra.tfplan > infra-plan.json
+          python ../scripts/review_eks_plan.py infra-plan.json --allow-destructive "$ALLOW_DESTRUCTIVE"
+          rm -f infra-plan.json
       - name: Inicializar Terraform
         working-directory: infra
         run: terraform init -input=false -reconfigure -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"

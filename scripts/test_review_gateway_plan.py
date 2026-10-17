@@ -52,6 +52,29 @@ def import_change(actions=("no-op",), importing="cjhmlk"):
     )
 
 
+def real_import_replace_plan():
+    """Formato equivalente ao resource_changes emitido por terraform show -json."""
+    plan = initial_plan()
+    vpc_link = plan["resource_changes"][-1]
+    vpc_link["change"].update({
+        "actions": ["delete", "create"],
+        "before": {
+            "id": "a1b2c3d4e5",
+            "name": "autoflow-homolog",
+            "subnet_ids": ["subnet-0123456789abcdef0"],
+            "security_group_ids": ["sg-0123456789abcdef0"],
+        },
+        "after": {
+            "name": "autoflow-homolog",
+            "subnet_ids": ["subnet-0123456789abcdef0"],
+            "security_group_ids": ["sg-0123456789abcdef0"],
+        },
+        "replace_paths": [["security_group_ids"]],
+        "importing": {"id": "a1b2c3d4e5"},
+    })
+    return plan
+
+
 class ReviewGatewayPlanTest(unittest.TestCase):
     def test_accepts_criacao_inicial_sem_contagem_fixa(self):
         with contextlib.redirect_stdout(io.StringIO()) as output:
@@ -65,31 +88,50 @@ class ReviewGatewayPlanTest(unittest.TestCase):
         self.assertIn("imports declarativos=1", output.getvalue())
 
     def test_accepts_import_com_substituicao_autorizada(self):
-        plan = initial_plan()
-        replacement = plan["resource_changes"][-1]
-        replacement["change"]["actions"] = ["delete", "create"]
-        replacement["change"]["importing"] = {"id": "cjhmlk"}
+        plan = real_import_replace_plan()
         with contextlib.redirect_stdout(io.StringIO()) as output:
             review(plan, "123456789012", allow_destructive=True)
         self.assertIn("1 imports declarativos", output.getvalue())
+
+    def test_diagnoses_each_import_validation_condition_without_echoing_id(self):
+        cases = (
+            ("address fora", lambda item: item.update(address="aws_vpc.wrong")),
+            ("type diferente", lambda item: item.update(type="aws_vpc")),
+            ("actions não permitidas", lambda item: item["change"].update(actions=["update"])),
+            ("importing.id ausente ou inválido", lambda item: item["change"].update(importing={"id": "id/com-separador"})),
+        )
+        for expected, mutate in cases:
+            with self.subTest(expected=expected):
+                item = import_change(actions=("delete", "create"), importing="a1b2c3d4e5")
+                mutate(item)
+                with self.assertRaisesRegex(RuntimeError, expected) as raised:
+                    review({"resource_changes": [item]}, "123456789012", allow_destructive=True)
+                self.assertIn("ALLOW_DESTRUCTIVE=true", str(raised.exception))
+                self.assertNotIn("a1b2c3d4e5", str(raised.exception))
 
     def test_rejeita_import_com_substituicao_sem_autorizacao(self):
         plan = initial_plan()
         replacement = plan["resource_changes"][-1]
         replacement["change"]["actions"] = ["delete", "create"]
         replacement["change"]["importing"] = {"id": "cjhmlk"}
-        with self.assertRaisesRegex(RuntimeError, "import fora do VPC Link esperado"):
+        with self.assertRaisesRegex(RuntimeError, "actions não permitidas"):
             review(plan, "123456789012", allow_destructive=False)
 
     def test_rejeita_import_fora_do_vpc_link_esperado(self):
         plan = {"resource_changes": [import_change()]}
         plan["resource_changes"][0]["address"] = "aws_vpc.other"
-        with self.assertRaisesRegex(RuntimeError, "import fora do VPC Link esperado"):
+        with self.assertRaisesRegex(RuntimeError, "address fora"):
             review(plan, "123456789012", allow_destructive=True)
 
     def test_rejeita_id_de_import_invalido(self):
-        with self.assertRaisesRegex(RuntimeError, "import fora do VPC Link esperado"):
+        with self.assertRaisesRegex(RuntimeError, "importing.id ausente ou inválido"):
             review({"resource_changes": [import_change(importing="vpclink/invalid")]}, "123456789012")
+
+    def test_gateway_workflow_forwards_dispatch_authorization_to_reviewer(self):
+        from pathlib import Path
+        workflow = (Path(__file__).parents[1] / ".github/workflows/api-gateway.yml").read_text(encoding="utf-8")
+        self.assertIn("ALLOW_DESTRUCTIVE: ${{ github.event_name == 'push' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false') }}", workflow)
+        self.assertIn('ALLOW_DESTRUCTIVE="$ALLOW_DESTRUCTIVE" python ../../scripts/review_gateway_plan.py gateway.tfplan', workflow)
 
     def test_rejeita_substituicao_nao_autorizada(self):
         plan = initial_plan()
