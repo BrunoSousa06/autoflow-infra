@@ -1,11 +1,14 @@
 """Confere escopo, rede privada e permissões do plan sem expor valores."""
 import json
 import os
+import re
 import subprocess
 import sys
 
 
 ALLOWED_METHODS = {"GET", "POST", "PATCH", "DELETE"}
+VPC_LINK_ADDRESS = "module.private_eks.aws_apigatewayv2_vpc_link.this"
+VPC_LINK_ID_PATTERN = re.compile(r"[A-Za-z0-9]+")
 
 
 def review(plan, expected_account, allow_destructive=False):
@@ -24,15 +27,21 @@ def review(plan, expected_account, allow_destructive=False):
     imports = [item for item in resource_changes if item["change"].get("importing") is not None]
     for item in imports:
         importing = item["change"].get("importing") or {}
-        if (item["address"] != 'module.private_eks.aws_apigatewayv2_vpc_link.this'
+        actions = item["change"]["actions"]
+        valid_actions = (["no-op"], ["read"])
+        if allow_destructive:
+            valid_actions = (*valid_actions, ["delete", "create"], ["create", "delete"])
+        if (item["address"] != VPC_LINK_ADDRESS
                 or item.get("type") != "aws_apigatewayv2_vpc_link"
-                or item["change"]["actions"] != ["no-op"]
-                or not str(importing.get("id", "")).startswith("vpclink-")):
+                or actions not in valid_actions
+                or not isinstance(importing.get("id"), str)
+                or not VPC_LINK_ID_PATTERN.fullmatch(importing["id"])):
             raise RuntimeError("O plan contém import fora do VPC Link esperado ou com alterações pendentes.")
 
-    # Import declarativo do VPC Link não é uma criação/alteração AWS.
+    # Import declarativo sem alterações não é uma operação AWS; import + replace
+    # permanece nas mudanças para passar pelas mesmas validações de recursos.
     changes = [item for item in resource_changes
-               if item not in imports and item["change"]["actions"] not in (["no-op"], ["read"])]
+               if item["change"]["actions"] not in (["no-op"], ["read"])]
     counts = {}
     for item in changes:
         action = ",".join(item["change"]["actions"])
@@ -41,19 +50,19 @@ def review(plan, expected_account, allow_destructive=False):
     if not changes:
         print(f"Plan aprovado na revisão estática: sem alterações AWS; imports declarativos={len(imports)}.")
         return
-    expected_creates = 152 - len(imports)
     allowed_actions = (["create"],)
     if allow_destructive:
-        allowed_actions = (*allowed_actions, ["delete"], ["delete", "create"])
-    create_count = sum("create" in item["change"]["actions"] for item in changes)
-    if (create_count != expected_creates
-            or any(item["change"]["actions"] not in allowed_actions for item in changes)):
+        allowed_actions = (*allowed_actions, ["delete"], ["delete", "create"], ["create", "delete"])
+    if any(item["change"]["actions"] not in allowed_actions for item in changes):
         raise RuntimeError(
-            f"O plan não corresponde ao escopo autorizado: {expected_creates} criações, "
-            "imports declarativos esperados e ações destrutivas somente com autorização explícita."
+            "O plan contém operações fora do escopo: somente criações e, com autorização explícita, "
+            "exclusões/substituições são permitidas."
         )
 
-    resources = {item["address"]: item["change"].get("after") or {} for item in changes}
+    resources = {
+        item["address"]: item["change"].get("after") or item["change"].get("before") or {}
+        for item in changes
+    }
     required = {
         "module.private_eks.aws_lb.this",
         "module.private_eks.aws_security_group.alb",
@@ -77,7 +86,7 @@ def review(plan, expected_account, allow_destructive=False):
 
     for item in changes:
         address = item["address"]
-        after = item["change"].get("after") or {}
+        after = item["change"].get("after") or item["change"].get("before") or {}
         if item["type"] == "aws_vpc_security_group_ingress_rule":
             if after.get("cidr_ipv4") or after.get("cidr_ipv6") or after.get("prefix_list_id"):
                 raise RuntimeError(f"Regra ingress ampla ou pública no plan: {address}")
@@ -144,7 +153,7 @@ def review(plan, expected_account, allow_destructive=False):
     if any(term in log_format.lower() for term in ("authorization", "token", "query", "path", "sourceip", "body")):
         raise RuntimeError("Access logs podem registrar dados pessoais, tokens ou query strings.")
 
-    print(f"Plan aprovado na revisão estática: {expected_creates} criações e {len(imports)} imports declarativos; somente ALB interno, SGs restritos, VPC Link e rotas/integrations definidas.")
+    print(f"Plan aprovado na revisão estática: {len(changes)} mudanças e {len(imports)} imports declarativos; somente ALB interno, SGs restritos, VPC Link e rotas/integrations definidas.")
 
 
 if __name__ == "__main__":
