@@ -33,6 +33,8 @@ jobs:
         env:
           AUTOFLOW_REPO: ${{ github.workspace }}/.contract-autoflow
         run: python -m unittest discover -s scripts -p test_gateway_routes.py -v
+      - name: Testar imports do VPC Link sem State
+        run: python -m unittest discover -s scripts -p test_prepare_gateway_imports.py -v
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.16.5"
@@ -117,9 +119,10 @@ jobs:
         run: |
           python scripts/state_resource_guard.py --bucket "$AWS_TERRAFORM_STATE_BUCKET" --key "$AWS_TF_STATE_KEY_GATEWAY" -- aws apigatewayv2 get-apis --query "Items[?Name=='autoflow-homolog'].ApiId | [0]" --output text
           python scripts/state_resource_guard.py --bucket "$AWS_TERRAFORM_STATE_BUCKET" --key "$AWS_TF_STATE_KEY_GATEWAY" -- aws elbv2 describe-load-balancers --names autoflow-homolog-private --query 'LoadBalancers[0].LoadBalancerArn' --output text
-          python scripts/state_resource_guard.py --bucket "$AWS_TERRAFORM_STATE_BUCKET" --key "$AWS_TF_STATE_KEY_GATEWAY" -- aws apigatewayv2 get-vpc-links --query "Items[?Name=='autoflow-homolog'].VpcLinkId | [0]" --output text
           cd infra/api-gateway
           terraform init -input=false -backend-config="bucket=$TF_VAR_terraform_state_bucket" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+          cd ../..
+          python scripts/prepare_gateway_imports.py --bucket "$TF_VAR_terraform_state_bucket" --key "$TF_STATE_KEY" --region "$AWS_REGION" --name autoflow-homolog --output infra/api-gateway/gateway-vpc-link-imports.auto.tf
       - name: Gerar e revisar plano
         working-directory: infra/api-gateway
         run: |

@@ -102,7 +102,6 @@ class EndpointAccessTests(unittest.TestCase):
         plan = content.split("  plan:", 1)[1].split("  apply:", 1)[0]
         apply = content.split("\n  apply:\n", 1)[1]
         self.assertIn("if: github.ref == 'refs/heads/develop' && (github.event_name == 'push'", plan)
-        self.assertIn("ALLOW_DESTRUCTIVE: 'false'", plan)
         self.assertIn("default: true", content.split("approve_state_bucket_creation:", 1)[1].split("permissions:", 1)[0])
         self.assertIn("inputs.approve_state_bucket_creation || 'true'", plan)
         self.assertIn("github.event_name == 'push'", apply)
@@ -112,8 +111,9 @@ class EndpointAccessTests(unittest.TestCase):
         self.assertIn("infra-tfplan-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}", apply)
         self.assertIn("terraform apply -input=false infra.tfplan", apply)
         self.assertNotIn("terraform plan", apply)
-        self.assertIn("ALLOW_DESTRUCTIVE: 'false'", apply)
-        self.assertIn("sys.exit(bool(changes))", plan)
+        self.assertNotIn("allow_destructive", content)
+        self.assertNotIn("sys.exit(bool(changes))", plan)
+        self.assertIn("Resources with delete/replacement actions:", plan)
         self.assertNotIn("kubectl rollout status", apply)
         self.assertNotIn("backend-deployment", apply)
         self.assertNotIn("frontend-deployment", apply)
