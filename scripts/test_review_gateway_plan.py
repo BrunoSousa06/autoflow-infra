@@ -20,6 +20,22 @@ def plan_with_action(actions):
 
 
 class ReviewGatewayPlanTest(unittest.TestCase):
+    def test_accepts_declarative_import_of_existing_vpc_link(self):
+        plan = plan_with_action(["no-op"])
+        change = plan["resource_changes"][0]
+        change["address"] = 'module.private_eks.aws_apigatewayv2_vpc_link.this'
+        change["type"] = "aws_apigatewayv2_vpc_link"
+        change["change"]["importing"] = {"id": "vpclink-123456"}
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            review(plan, "123456789012")
+        self.assertIn("imports declarativos=1", output.getvalue())
+
+    def test_rejects_import_outside_vpc_link_scope(self):
+        plan = plan_with_action(["no-op"])
+        plan["resource_changes"][0]["change"]["importing"] = {"id": "resource-id"}
+        with self.assertRaisesRegex(RuntimeError, "import fora do VPC Link esperado"):
+            review(plan, "123456789012")
+
     def test_plan_sem_alteracoes_aprovado_sem_contar_state_como_criacao(self):
         plan = plan_with_action(["no-op"])
         # Inventário do state e valores planejados não são mudanças deste plan.
@@ -27,7 +43,7 @@ class ReviewGatewayPlanTest(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()) as output:
             review(plan, "123456789012")
         self.assertIn("Ações planejadas: {}", output.getvalue())
-        self.assertIn("nenhuma alteração planejada", output.getvalue())
+        self.assertIn("sem alterações AWS", output.getvalue())
 
     def test_criacao_inesperada_reprovada(self):
         with self.assertRaisesRegex(RuntimeError, "escopo autorizado"):
