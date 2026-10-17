@@ -55,6 +55,21 @@ def render_imports(imports):
     ) + ("\n" if imports else "")
 
 
+def state_addresses():
+    try:
+        state = subprocess.run(["terraform", "-chdir=infra", "state", "list"], check=True,
+                               capture_output=True, text=True)
+    except subprocess.CalledProcessError as error:
+        output = "\n".join((error.stdout or "", error.stderr or "")).lower()
+        if any(line.strip() in {"no state file was found", "no state file was found!"}
+               for line in output.splitlines()):
+            return set()
+        raise RuntimeError(
+            "Falha ao consultar Terraform State; verifique validade das credenciais AWS e acesso ao bucket de State"
+        ) from error
+    return set(state.stdout.splitlines())
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--cluster", required=True)
@@ -62,14 +77,7 @@ def main():
     parser.add_argument("--region", required=True)
     parser.add_argument("--output", default="eks-access-imports.auto.tf")
     args = parser.parse_args()
-    try:
-        state = subprocess.run(["terraform", "-chdir=infra", "state", "list"], check=True,
-                               capture_output=True, text=True)
-    except subprocess.CalledProcessError as error:
-        raise RuntimeError(
-            "Falha ao consultar Terraform State; verifique validade das credenciais AWS e acesso ao bucket de State"
-        ) from error
-    addresses = set(state.stdout.splitlines())
+    addresses = state_addresses()
     imports = discover_imports(["aws"], addresses, args.cluster, args.principal, args.region)
     Path(args.output).write_text(render_imports(imports), encoding="utf-8")
     print(f"Imports declarativos necessários: {len(imports)}")

@@ -43,6 +43,21 @@ class AccessImportTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "credenciais e permissões"):
                 imports.access_entry_exists(["aws"], "cluster", "arn:role", "us-east-1")
 
+    def test_missing_terraform_state_is_an_empty_address_set(self):
+        error = __import__("subprocess").CalledProcessError(
+            1, "terraform state list", stderr="No state file was found!"
+        )
+        with patch("prepare_eks_access_imports.subprocess.run", side_effect=error):
+            self.assertEqual(imports.state_addresses(), set())
+
+    def test_terraform_state_access_errors_still_fail_closed(self):
+        error = __import__("subprocess").CalledProcessError(
+            1, "terraform state list", stderr="AccessDenied: S3 operation forbidden"
+        )
+        with patch("prepare_eks_access_imports.subprocess.run", side_effect=error):
+            with self.assertRaisesRegex(RuntimeError, "acesso ao bucket de State"):
+                imports.state_addresses()
+
 
 if __name__ == "__main__":
     unittest.main()
