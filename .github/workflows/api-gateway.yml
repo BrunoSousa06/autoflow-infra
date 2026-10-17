@@ -46,7 +46,7 @@ jobs:
 
   plan:
     name: Terraform Plan homolog
-    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    if: github.ref == 'refs/heads/develop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     needs: validate
     runs-on: ubuntu-latest
     env:
@@ -139,7 +139,7 @@ jobs:
 
   apply:
     name: Terraform Apply homolog (aprovação requerida)
-    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    if: github.ref == 'refs/heads/develop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     needs: plan
     runs-on: ubuntu-latest
     environment: homolog
