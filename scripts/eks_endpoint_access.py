@@ -29,7 +29,16 @@ class AwsCli:
 
 
 def cluster_config(aws, cluster, region):
-    return aws("eks", "describe-cluster", "--name", cluster, "--region", region)["cluster"]["resourcesVpcConfig"]
+    try:
+        return aws("eks", "describe-cluster", "--name", cluster, "--region", region)["cluster"]["resourcesVpcConfig"]
+    except subprocess.CalledProcessError as error:
+        # A first-time provision has no cluster yet. Only the explicit EKS
+        # not-found response is benign; expired credentials and AccessDenied
+        # must remain fatal.
+        message = (error.stderr or "").lower()
+        if "resourcenotfoundexception" in message or "resource not found" in message:
+            return None
+        raise
 
 
 def update_and_wait(aws, cluster, region, cidrs):
@@ -48,6 +57,8 @@ def update_and_wait(aws, cluster, region, cidrs):
 def authorize(aws, cluster, region, runner_ip, baseline):
     cidr = str(ipaddress.ip_network(runner_ip + "/32", strict=True))
     config = cluster_config(aws, cluster, region)
+    if config is None:
+        return None
     existing = set(config["publicAccessCidrs"])
     original = set(baseline)
     if not original.issubset(existing):
@@ -178,6 +189,9 @@ def main():
     aws = AwsCli()
     if args.action == "authorize":
         lease = authorize(aws, args.cluster, args.region, args.ip, args.baseline.split(","))
+        if lease is None:
+            print("Cluster EKS ausente; autorização temporária ignorada antes da criação.")
+            return
         with open(args.lease, "w", encoding="utf-8") as stream:
             json.dump(lease, stream)
     else:

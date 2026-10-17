@@ -113,9 +113,9 @@ O inventário automatizado está em `scripts/inventory_recovery.py`. Ele consult
 ```bash
 python scripts/inventory_recovery.py \
   --profile fiap-lab \
-  --region us-east-1 \
-  --expected-account 108798852045 \
-  --bucket autoflow-tfstate-learnerlab-108798852045-us-east-1 \
+  --region "$AWS_REGION" \
+  --expected-account "$AWS_EXPECTED_ACCOUNT_ID" \
+  --bucket "$AWS_TERRAFORM_STATE_BUCKET" \
   --output C:/caminho-local-protegido/recovery-inventory.json
 ```
 

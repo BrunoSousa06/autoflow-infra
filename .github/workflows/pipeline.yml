@@ -16,6 +16,10 @@ on:
         description: Autorizar exclusões somente após revisar o plan
         type: boolean
         default: false
+      approve_state_bucket_creation:
+        description: Permitir bootstrap do bucket de Terraform State quando ausente
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -34,6 +38,7 @@ jobs:
       - run: python -m unittest discover -s scripts -p "test_verify_aws_account.py" -v
       - run: python -m unittest discover -s scripts -p "test_eks_endpoint_access.py" -v
       - run: python -m unittest discover -s scripts -p "test_prepare_eks_access_imports.py" -v
+      - run: python -m unittest discover -s scripts -p "test_state_resource_guard.py" -v
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.16.5"
@@ -80,6 +85,14 @@ jobs:
           test "$(aws sts get-caller-identity --query Account --output text)" = "$EXPECTED_ACCOUNT"
           echo "ip=$(curl -4fsS https://checkip.amazonaws.com | tr -d '\n')" >> "$GITHUB_OUTPUT"
           test -n "$PLAN_ENCRYPTION_PASSPHRASE"
+      - name: Verificar/bootstrap seguro do bucket de Terraform State
+        env:
+          AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
+          AWS_TERRAFORM_STATE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          APPROVE_CREATE: ${{ inputs.approve_state_bucket_creation || 'true' }}
+        run: |
+          if [ "$APPROVE_CREATE" = true ]; then python scripts/bootstrap_state_bucket.py --approve-create; else python scripts/bootstrap_state_bucket.py; fi
       - name: Autorizar IP público exclusivo no EKS e aguardar atualização
         env:
           RUNNER_IP: ${{ steps.runner.outputs.ip }}
@@ -89,8 +102,14 @@ jobs:
           terraform_version: "1.16.5"
           terraform_wrapper: false
       - name: Inicializar Terraform
-        working-directory: infra
-        run: terraform init -input=false -reconfigure -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+        env:
+          AWS_TERRAFORM_STATE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
+          AWS_TF_STATE_KEY_INFRA: ${{ vars.AWS_TF_STATE_KEY_INFRA }}
+        run: |
+          python scripts/state_resource_guard.py --bucket "$AWS_TERRAFORM_STATE_BUCKET" --key "$AWS_TF_STATE_KEY_INFRA" -- aws eks describe-cluster --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --query cluster.name --output text
+          python scripts/state_resource_guard.py --bucket "$AWS_TERRAFORM_STATE_BUCKET" --key "$AWS_TF_STATE_KEY_INFRA" -- aws ec2 describe-vpcs --region "$AWS_REGION" --filters Name=tag:Name,Values=main-vpc --query 'Vpcs[0].VpcId' --output text
+          cd infra
+          terraform init -input=false -reconfigure -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
       - name: Preparar imports declarativos para recursos EKS existentes
         env:
           OPERATOR_ROLE_ARN: ${{ vars.AWS_EKS_OPERATOR_ACCESS_ROLE_ARN }}
@@ -99,7 +118,7 @@ jobs:
         id: plan
         working-directory: infra
         env:
-          ALLOW_DESTRUCTIVE: ${{ inputs.allow_destructive || 'false' }}
+          ALLOW_DESTRUCTIVE: 'false'
         run: |
           set -euo pipefail
           terraform plan -input=false -no-color -out=infra.tfplan
@@ -111,7 +130,7 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"has_deletions={str(bool(changes)).lower()}\n")
           print("Resources with delete/replacement actions:", changes)
-          sys.exit(bool(changes) and os.environ["ALLOW_DESTRUCTIVE"] != "true")
+          sys.exit(bool(changes))
           PY
           printf '%s' "$GITHUB_SHA" > infra.tfplan.commit
           gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$PLAN_ENCRYPTION_PASSPHRASE" --output infra.tfplan.gpg infra.tfplan
@@ -151,7 +170,7 @@ jobs:
       EKS_LEASE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       EKS_LEASE_KEY: ci/eks-endpoint-lease.json
       PLAN_ENCRYPTION_PASSPHRASE: ${{ secrets.TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE }}
-      ALLOW_DESTRUCTIVE: ${{ inputs.allow_destructive || 'false' }}
+      ALLOW_DESTRUCTIVE: 'false'
     steps:
       - uses: actions/checkout@v4
         with:

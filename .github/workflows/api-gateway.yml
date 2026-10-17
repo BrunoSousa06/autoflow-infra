@@ -107,8 +107,15 @@ jobs:
           terraform_version: "1.16.5"
           terraform_wrapper: false
       - name: Inicializar state exclusivo do gateway
-        working-directory: infra/api-gateway
-        run: terraform init -input=false -backend-config="bucket=$TF_VAR_terraform_state_bucket" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+        env:
+          AWS_TERRAFORM_STATE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
+          AWS_TF_STATE_KEY_GATEWAY: ${{ vars.AWS_TF_STATE_KEY_GATEWAY }}
+        run: |
+          python scripts/state_resource_guard.py --bucket "$AWS_TERRAFORM_STATE_BUCKET" --key "$AWS_TF_STATE_KEY_GATEWAY" -- aws apigatewayv2 get-apis --query "Items[?Name=='autoflow-homolog'].ApiId | [0]" --output text
+          python scripts/state_resource_guard.py --bucket "$AWS_TERRAFORM_STATE_BUCKET" --key "$AWS_TF_STATE_KEY_GATEWAY" -- aws elbv2 describe-load-balancers --names autoflow-homolog-private --query 'LoadBalancers[0].LoadBalancerArn' --output text
+          python scripts/state_resource_guard.py --bucket "$AWS_TERRAFORM_STATE_BUCKET" --key "$AWS_TF_STATE_KEY_GATEWAY" -- aws apigatewayv2 get-vpc-links --query "Items[?Name=='autoflow-homolog'].VpcLinkId | [0]" --output text
+          cd infra/api-gateway
+          terraform init -input=false -backend-config="bucket=$TF_VAR_terraform_state_bucket" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
       - name: Gerar e revisar plano
         working-directory: infra/api-gateway
         run: |
