@@ -99,7 +99,11 @@ jobs:
           test "$(aws sts get-caller-identity --query Account --output text)" = "$TF_VAR_expected_account_id"
           test "$(aws ec2 describe-availability-zones --region "$AWS_REGION" --query 'AvailabilityZones[0].RegionName' --output text)" = "$AWS_REGION"
           aws s3api head-bucket --bucket "$TF_VAR_terraform_state_bucket"
-          python scripts/state_resource_guard.py --bucket "$TF_VAR_terraform_state_bucket" --key "$TF_VAR_infra_state_key" -- aws eks describe-cluster --name "$TF_VAR_cluster_name" --region "$AWS_REGION" --query cluster.name --output text
+          INFRA_STATE_STATUS=$(python scripts/state_resource_guard.py --bucket "$TF_VAR_terraform_state_bucket" --key "$TF_VAR_infra_state_key" -- aws eks describe-cluster --name "$TF_VAR_cluster_name" --region "$AWS_REGION" --query cluster.name --output text)
+          if [ "$INFRA_STATE_STATUS" != state-present ]; then
+            echo "Pré-requisito ausente: State EKS e cluster não encontrados. Execute e aplique primeiro o pipeline autoflow-infra; o API Gateway depende de eks/terraform.tfstate." >&2
+            exit 1
+          fi
           test "$(aws eks describe-cluster --name "$TF_VAR_cluster_name" --query cluster.status --output text)" = ACTIVE
           test "$(aws eks describe-nodegroup --cluster-name "$TF_VAR_cluster_name" --nodegroup-name "$TF_VAR_nodegroup_name" --query nodegroup.status --output text)" = ACTIVE
       - uses: hashicorp/setup-terraform@v3
@@ -197,7 +201,11 @@ jobs:
           test "$(aws sts get-caller-identity --query Account --output text)" = "$TF_VAR_expected_account_id"
           test "$(aws ec2 describe-availability-zones --region "$AWS_REGION" --query 'AvailabilityZones[0].RegionName' --output text)" = "$AWS_REGION"
           aws s3api head-bucket --bucket "$TF_VAR_terraform_state_bucket"
-          python scripts/state_resource_guard.py --bucket "$TF_VAR_terraform_state_bucket" --key "$TF_VAR_infra_state_key" -- aws eks describe-cluster --name "$TF_VAR_cluster_name" --region "$AWS_REGION" --query cluster.name --output text
+          INFRA_STATE_STATUS=$(python scripts/state_resource_guard.py --bucket "$TF_VAR_terraform_state_bucket" --key "$TF_VAR_infra_state_key" -- aws eks describe-cluster --name "$TF_VAR_cluster_name" --region "$AWS_REGION" --query cluster.name --output text)
+          if [ "$INFRA_STATE_STATUS" != state-present ]; then
+            echo "Pré-requisito ausente: State EKS e cluster não encontrados. Execute e aplique primeiro o pipeline autoflow-infra; o API Gateway depende de eks/terraform.tfstate." >&2
+            exit 1
+          fi
           test "$(aws eks describe-cluster --name "$TF_VAR_cluster_name" --query cluster.status --output text)" = ACTIVE
           test "$(aws eks describe-nodegroup --cluster-name "$TF_VAR_cluster_name" --nodegroup-name "$TF_VAR_nodegroup_name" --query nodegroup.status --output text)" = ACTIVE
       - uses: hashicorp/setup-terraform@v3
