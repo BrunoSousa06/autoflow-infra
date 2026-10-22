@@ -2,7 +2,7 @@ name: Pipeline
 
 on:
   push:
-    branches: [develop, main]
+    branches: [develop, main, 'feature/**']
   pull_request:
     types: [opened, synchronize, reopened]
     branches: [develop, main]
@@ -51,7 +51,7 @@ jobs:
 
   plan:
     name: Terraform Plan protegido
-    if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/feature/')) && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     needs: validate
     runs-on: ubuntu-latest
     environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
@@ -68,7 +68,7 @@ jobs:
       EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
       EKS_LEASE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       EKS_LEASE_KEY: ci/eks-endpoint-lease.json
-      ALLOW_DESTRUCTIVE: ${{ github.event_name == 'push' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false') }}
+      ALLOW_DESTRUCTIVE: ${{ (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && (github.event_name == 'push' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false')) || 'false' }}
       PLAN_ENCRYPTION_PASSPHRASE: ${{ secrets.TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE }}
       TF_VAR_enable_newrelic_kubernetes: ${{ vars.ENABLE_NEWRELIC_KUBERNETES || 'false' }}
       TF_VAR_enable_newrelic_account_resources: ${{ vars.ENABLE_NEWRELIC_ACCOUNT_RESOURCES || 'false' }}
@@ -80,8 +80,18 @@ jobs:
       TF_VAR_newrelic_synthetic_locations: ${{ vars.NEW_RELIC_SYNTHETIC_LOCATIONS_JSON || '[]' }}
       TF_VAR_newrelic_api_gateway_dashboard_queries: ${{ vars.NEW_RELIC_API_GATEWAY_DASHBOARD_QUERIES_JSON || '[]' }}
       AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
-      NEWRELIC_DEACTIVATION_APPROVED: ${{ github.event_name == 'workflow_dispatch' && inputs.apply && inputs.allow_destructive && 'true' || 'false' }}
+      NEWRELIC_DEACTIVATION_APPROVED: ${{ (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'workflow_dispatch' && inputs.apply && inputs.allow_destructive && 'true' || 'false' }}
     steps:
+      - name: Exigir Required reviewers no environment para feature Plan
+        if: startsWith(github.ref, 'refs/heads/feature/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVAL_CONFIGURED: ${{ vars.TERRAFORM_APPLY_APPROVAL_CONFIGURED }}
+        run: |
+          set -euo pipefail
+          test "$APPROVAL_CONFIGURED" = true
+          REVIEWERS=$(gh api "repos/$GITHUB_REPOSITORY/environments/homolog" --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length')
+          test "$REVIEWERS" -gt 0
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
@@ -108,7 +118,7 @@ jobs:
           AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
           AWS_TERRAFORM_STATE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
           AWS_REGION: ${{ vars.AWS_REGION }}
-          APPROVE_CREATE: ${{ inputs.approve_state_bucket_creation || 'true' }}
+          APPROVE_CREATE: ${{ startsWith(github.ref, 'refs/heads/feature/') && 'false' || (inputs.approve_state_bucket_creation || 'true') }}
         run: |
           if [ "$APPROVE_CREATE" = true ]; then python scripts/bootstrap_state_bucket.py --approve-create; else python scripts/bootstrap_state_bucket.py; fi
       - name: Autorizar IP público exclusivo no EKS e aguardar atualização
@@ -141,15 +151,17 @@ jobs:
           terraform show -json infra.tfplan > infra-plan.json
           python ../scripts/newrelic_pipeline_guard.py check-plan infra-plan.json
           python ../scripts/review_eks_plan.py infra-plan.json --allow-destructive "$ALLOW_DESTRUCTIVE"
-          printf '%s' "$GITHUB_SHA" > infra.tfplan.commit
-          gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$PLAN_ENCRYPTION_PASSPHRASE" --output infra.tfplan.gpg infra.tfplan
-          sha256sum infra.tfplan.gpg infra.tfplan.commit infra-newrelic-inputs.sha256 > infra.tfplan.sha256
+          if [[ "$GITHUB_REF" == refs/heads/develop || "$GITHUB_REF" == refs/heads/main ]]; then
+            printf '%s' "$GITHUB_SHA" > infra.tfplan.commit
+            gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$PLAN_ENCRYPTION_PASSPHRASE" --output infra.tfplan.gpg infra.tfplan
+            sha256sum infra.tfplan.gpg infra.tfplan.commit infra-newrelic-inputs.sha256 > infra.tfplan.sha256
+          fi
           rm -f infra.tfplan infra-plan.json
       - name: Remover autorização temporária
         if: always()
         run: python scripts/eks_endpoint_access.py cleanup --region "$AWS_REGION" --cluster "$EKS_CLUSTER_NAME"
       - name: Publicar artifact criptografado da execução
-        if: success()
+        if: success() && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main')
         uses: actions/upload-artifact@v4
         with:
           name: infra-tfplan-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
@@ -193,7 +205,7 @@ jobs:
       TF_VAR_newrelic_synthetic_locations: ${{ vars.NEW_RELIC_SYNTHETIC_LOCATIONS_JSON || '[]' }}
       TF_VAR_newrelic_api_gateway_dashboard_queries: ${{ vars.NEW_RELIC_API_GATEWAY_DASHBOARD_QUERIES_JSON || '[]' }}
       AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
-      NEWRELIC_DEACTIVATION_APPROVED: ${{ github.event_name == 'workflow_dispatch' && inputs.apply && inputs.allow_destructive && 'true' || 'false' }}
+      NEWRELIC_DEACTIVATION_APPROVED: ${{ (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'workflow_dispatch' && inputs.apply && inputs.allow_destructive && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v4
         with:

@@ -2,8 +2,7 @@ name: Auto Create PR to Develop
 
 on:
   push:
-    branches-ignore:
-      - develop
+    branches: [main]
 
 permissions:
   contents: write

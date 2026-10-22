@@ -5,7 +5,7 @@ on:
     branches: [develop, main]
     paths: ["infra/api-gateway/**", "scripts/*gateway*", ".github/workflows/api-gateway.yml"]
   push:
-    branches: [develop, main]
+    branches: [develop, main, 'feature/**']
     paths: ["infra/api-gateway/**", "scripts/*gateway*", ".github/workflows/api-gateway.yml"]
   workflow_dispatch:
     inputs:
@@ -59,9 +59,10 @@ jobs:
 
   plan:
     name: Terraform Plan homolog
-    if: github.ref == 'refs/heads/develop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: (github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/heads/feature/')) && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     needs: validate
     runs-on: ubuntu-latest
+    environment: homolog
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
       TF_VAR_aws_region: ${{ vars.AWS_REGION }}
@@ -75,6 +76,16 @@ jobs:
       TF_VAR_nodegroup_name: ${{ vars.EKS_NODEGROUP_NAME }}
       TF_STATE_KEY: ${{ vars.AWS_TF_STATE_KEY_GATEWAY }}
     steps:
+      - name: Exigir Required reviewers no environment para feature Plan
+        if: startsWith(github.ref, 'refs/heads/feature/')
+        env:
+          APPROVAL_CONFIGURED: ${{ vars.TERRAFORM_APPLY_APPROVAL_CONFIGURED }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$APPROVAL_CONFIGURED" = "true"
+          REVIEWERS=$(gh api "repos/$GITHUB_REPOSITORY/environments/homolog" --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length')
+          test "$REVIEWERS" -gt 0
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
@@ -138,12 +149,13 @@ jobs:
       - name: Gerar e revisar plano
         working-directory: infra/api-gateway
         env:
-          ALLOW_DESTRUCTIVE: ${{ github.event_name == 'push' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false') }}
+          ALLOW_DESTRUCTIVE: ${{ github.ref == 'refs/heads/develop' && (github.event_name == 'push' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false')) || 'false' }}
         run: |
           terraform plan -input=false -out=gateway.tfplan
           ALLOW_DESTRUCTIVE="$ALLOW_DESTRUCTIVE" python ../../scripts/review_gateway_plan.py gateway.tfplan
-          sha256sum gateway.tfplan > gateway.tfplan.sha256
+          if [[ "$GITHUB_REF" == refs/heads/develop ]]; then sha256sum gateway.tfplan > gateway.tfplan.sha256; else rm -f gateway.tfplan; fi
       - name: Publicar plano confidencial e imutável
+        if: github.ref == 'refs/heads/develop'
         uses: actions/upload-artifact@v4
         with:
           name: gateway-tfplan-${{ github.run_id }}-${{ github.run_attempt }}

@@ -104,12 +104,12 @@ class EndpointAccessTests(unittest.TestCase):
         content = workflow.read_text(encoding="utf-8")
         plan = content.split("  plan:", 1)[1].split("  apply:", 1)[0]
         apply = content.split("\n  apply:\n", 1)[1]
-        self.assertIn("if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')", plan)
+        self.assertIn("if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/feature/')) && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')", plan)
         self.assertIn("default: true", content.split("approve_state_bucket_creation:", 1)[1].split("permissions:", 1)[0])
         self.assertIn("description: Autorizar exclusões/substituições após revisar o plan", content)
         self.assertIn("python ../scripts/review_eks_plan.py infra-plan.json --allow-destructive \"$ALLOW_DESTRUCTIVE\"", content)
         self.assertIn("default: false", content.split("allow_destructive:", 1)[1].split("permissions:", 1)[0])
-        self.assertIn("ALLOW_DESTRUCTIVE: ${{ github.event_name == 'push' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false') }}", plan)
+        self.assertIn("ALLOW_DESTRUCTIVE: ${{ (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && (github.event_name == 'push' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false')) || 'false' }}", plan)
         self.assertIn("ALLOW_DESTRUCTIVE: ${{ github.event_name == 'push' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false') }}", apply)
         self.assertIn("inputs.approve_state_bucket_creation || 'true'", plan)
         self.assertIn("github.event_name == 'push'", apply)
