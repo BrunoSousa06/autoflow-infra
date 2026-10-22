@@ -2,79 +2,211 @@ name: Pipeline
 
 on:
   push:
-    branches: ["develop", "main"]
+    branches: [develop, main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [develop, main]
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: Aplicar o plan de VPC/EKS após aprovação
+        type: boolean
+        default: false
+      approve_state_bucket_creation:
+        description: Permitir bootstrap do bucket de Terraform State quando ausente
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: autoflow-eks-endpoint-deploy
+  cancel-in-progress: false
 
 jobs:
-
-  deploy-aws:
-    name: Deploy Infra with Terraform
+  validate:
+    name: CI Terraform de VPC/EKS
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - run: python -m unittest discover -s scripts -p "test_verify_aws_account.py" -v
+      - run: python -m unittest discover -s scripts -p "test_eks_endpoint_access.py" -v
+      - run: python -m unittest discover -s scripts -p "test_prepare_eks_access_imports.py" -v
+      - run: python -m unittest discover -s scripts -p "test_state_resource_guard.py" -v
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.5"
+          terraform_wrapper: false
+      - run: terraform fmt -check -recursive infra
+      - run: terraform -chdir=infra init -backend=false -input=false
+      - run: terraform -chdir=infra validate
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+  plan:
+    name: Terraform Plan protegido
+    if: github.ref == 'refs/heads/develop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: validate
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TF_STATE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
+      TF_STATE_KEY: ${{ vars.AWS_TF_STATE_KEY_INFRA }}
+      TF_VAR_aws_allowed_account_ids: '["${{ vars.AWS_EXPECTED_ACCOUNT_ID }}"]'
+      TF_VAR_region_default: ${{ vars.AWS_REGION }}
+      TF_VAR_cluster_role_arn: ${{ vars.AWS_EKS_CLUSTER_ROLE_ARN }}
+      TF_VAR_node_role_arn: ${{ vars.AWS_EKS_NODE_ROLE_ARN }}
+      TF_VAR_operator_access_role_arn: ${{ vars.AWS_EKS_OPERATOR_ACCESS_ROLE_ARN }}
+      EKS_CLUSTER_NAME: eks-autoflow
+      EKS_LEASE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
+      EKS_LEASE_KEY: ci/eks-endpoint-lease.json
+      PLAN_ENCRYPTION_PASSPHRASE: ${{ secrets.TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: us-east-1
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-
-      - name: Validação de S3 Bucket
-        run: |
-          if aws s3api head-bucket --bucket state-autoflow-terraform 2>/dev/null; then
-            echo "Terraform state bucket already exists."
-          else
-            echo "Creating Terraform state bucket..."
-            aws s3api create-bucket \
-              --bucket state-autoflow-terraform \
-              --region us-east-1
-          fi
-
-      - name: Habilitar versionamento do S3
-        run: |
-          aws s3api put-bucket-versioning \
-            --bucket state-autoflow-terraform \
-            --versioning-configuration Status=Enabled
-
-      - name: Terraform Init
-        working-directory: ./infra
-        run: terraform init
-
-      - name: Terraform Validate
-        working-directory: ./infra
-        run: terraform validate
-
-      - name: Terraform Plan
-        working-directory: ./infra
-        run: terraform plan
-
-      - name: Terraform Apply
-        working-directory: ./infra
-        run: terraform apply -auto-approve
-  
-  create-pr:
-    name: Create PR to main
-    needs: deploy-aws
-    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Create Pull Request
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Conferir identidade, configurações e saída do runner
+        id: runner
+        shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXPECTED_ACCOUNT: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
         run: |
-          gh pr create \
-            --base main \
-            --head develop \
-            --title "Criação de PR automatico para main" \
-            --body "Um Pull request automatico foi criado para a branch main após o deploy bem-sucedido do Terraform." \
-            || echo "PR ja existe e não sera criado."
+          set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$EXPECTED_ACCOUNT"
+          echo "ip=$(curl -4fsS https://checkip.amazonaws.com | tr -d '\n')" >> "$GITHUB_OUTPUT"
+          test -n "$PLAN_ENCRYPTION_PASSPHRASE"
+      - name: Verificar/bootstrap seguro do bucket de Terraform State
+        env:
+          AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
+          AWS_TERRAFORM_STATE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          APPROVE_CREATE: ${{ inputs.approve_state_bucket_creation || 'true' }}
+        run: |
+          if [ "$APPROVE_CREATE" = true ]; then python scripts/bootstrap_state_bucket.py --approve-create; else python scripts/bootstrap_state_bucket.py; fi
+      - name: Autorizar IP público exclusivo no EKS e aguardar atualização
+        env:
+          RUNNER_IP: ${{ steps.runner.outputs.ip }}
+        run: python scripts/eks_endpoint_access.py authorize --ip "$RUNNER_IP"
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.5"
+          terraform_wrapper: false
+      - name: Inicializar Terraform
+        env:
+          AWS_TERRAFORM_STATE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
+          AWS_TF_STATE_KEY_INFRA: ${{ vars.AWS_TF_STATE_KEY_INFRA }}
+        run: |
+          python scripts/state_resource_guard.py --bucket "$AWS_TERRAFORM_STATE_BUCKET" --key "$AWS_TF_STATE_KEY_INFRA" -- aws eks describe-cluster --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --query cluster.name --output text
+          cd infra
+          terraform init -input=false -reconfigure -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+      - name: Preparar imports declarativos para recursos EKS existentes
+        env:
+          OPERATOR_ROLE_ARN: ${{ vars.AWS_EKS_OPERATOR_ACCESS_ROLE_ARN }}
+        run: python scripts/prepare_eks_access_imports.py --cluster "$EKS_CLUSTER_NAME" --principal "$OPERATOR_ROLE_ARN" --region "$AWS_REGION" --output infra/eks-access-imports.auto.tf
+      - name: Gerar plan e registrar ações de destruição/substituição
+        id: plan
+        working-directory: infra
+        run: |
+          set -euo pipefail
+          terraform plan -input=false -no-color -out=infra.tfplan
+          terraform show -json infra.tfplan > infra-plan.json
+          python - <<'PY'
+          import json
+          plan = json.load(open("infra-plan.json", encoding="utf-8"))
+          changes = [r["address"] for r in plan.get("resource_changes", []) if "delete" in r["change"]["actions"]]
+          print("Resources with delete/replacement actions:", changes)
+          PY
+          printf '%s' "$GITHUB_SHA" > infra.tfplan.commit
+          gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$PLAN_ENCRYPTION_PASSPHRASE" --output infra.tfplan.gpg infra.tfplan
+          sha256sum infra.tfplan.gpg infra.tfplan.commit > infra.tfplan.sha256
+          rm -f infra.tfplan infra-plan.json
+      - name: Remover autorização temporária
+        if: always()
+        run: python scripts/eks_endpoint_access.py cleanup
+      - name: Publicar artifact criptografado da execução
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: infra-tfplan-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: |
+            infra/infra.tfplan.gpg
+            infra/infra.tfplan.commit
+            infra/infra.tfplan.sha256
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  apply:
+    name: Terraform Apply homolog (aprovação requerida)
+    if: github.ref == 'refs/heads/develop' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.apply))
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: homolog
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TF_STATE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
+      TF_STATE_KEY: ${{ vars.AWS_TF_STATE_KEY_INFRA }}
+      TF_VAR_aws_allowed_account_ids: '["${{ vars.AWS_EXPECTED_ACCOUNT_ID }}"]'
+      TF_VAR_region_default: ${{ vars.AWS_REGION }}
+      TF_VAR_cluster_role_arn: ${{ vars.AWS_EKS_CLUSTER_ROLE_ARN }}
+      TF_VAR_node_role_arn: ${{ vars.AWS_EKS_NODE_ROLE_ARN }}
+      TF_VAR_operator_access_role_arn: ${{ vars.AWS_EKS_OPERATOR_ACCESS_ROLE_ARN }}
+      EKS_LEASE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
+      EKS_LEASE_KEY: ci/eks-endpoint-lease.json
+      PLAN_ENCRYPTION_PASSPHRASE: ${{ secrets.TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Exigir aprovação real do environment homolog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          REVIEWERS=$(gh api "repos/$GITHUB_REPOSITORY/environments/homolog" --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length')
+          test "$REVIEWERS" -gt 0
+      - name: Autorizar IP deste runner para Apply
+        id: runner
+        run: |
+          set -euo pipefail
+          echo "ip=$(curl -4fsS https://checkip.amazonaws.com | tr -d '\n')" >> "$GITHUB_OUTPUT"
+      - name: Atualizar endpoint e aguardar conclusão
+        env:
+          RUNNER_IP: ${{ steps.runner.outputs.ip }}
+        run: python scripts/eks_endpoint_access.py authorize --ip "$RUNNER_IP"
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.5"
+          terraform_wrapper: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: infra-tfplan-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: infra
+      - name: Conferir vínculo, integridade e descriptografar plan aprovado
+        working-directory: infra
+        run: |
+          set -euo pipefail
+          test "$(cat infra.tfplan.commit)" = "$GITHUB_SHA"
+          sha256sum --check infra.tfplan.sha256
+          gpg --batch --yes --decrypt --passphrase "$PLAN_ENCRYPTION_PASSPHRASE" --output infra.tfplan infra.tfplan.gpg
+      - name: Inicializar Terraform
+        working-directory: infra
+        run: terraform init -input=false -reconfigure -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+      - name: Aplicar plan aprovado
+        working-directory: infra
+        run: terraform apply -input=false infra.tfplan
+      - name: Limpar CIDR temporário mesmo após falha
+        if: always()
+        run: python scripts/eks_endpoint_access.py cleanup

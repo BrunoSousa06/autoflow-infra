@@ -1,16 +1,16 @@
 resource "aws_eks_access_entry" "access_entry" {
-  cluster_name  = aws_eks_cluster.autoflow.name
-  principal_arn = var.role_arn
-  type          = "STANDARD"
+  count = var.create_operator_access_entry ? 1 : 0
 
-  depends_on = [
-    aws_eks_cluster.autoflow
-  ]
+  cluster_name  = aws_eks_cluster.autoflow.name
+  principal_arn = local.effective_access_role_arn
+  type          = "STANDARD"
 }
 
 resource "aws_eks_access_policy_association" "labrole_admin" {
+  count = var.create_operator_access_entry ? 1 : 0
+
   cluster_name  = aws_eks_cluster.autoflow.name
-  principal_arn = var.role_arn
+  principal_arn = local.effective_access_role_arn
 
   policy_arn = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
 
