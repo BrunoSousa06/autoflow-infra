@@ -262,7 +262,7 @@ jobs:
           rm -f infra-plan.json
       - name: Inicializar Terraform
         working-directory: infra
-        run: terraform init -input=false -reconfigure -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+        run: terraform init -input=false -lockfile=readonly -reconfigure -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
       - name: Confirmar referência da License Key no Kubernetes
         if: env.TF_VAR_enable_newrelic_kubernetes == 'true'
         run: |

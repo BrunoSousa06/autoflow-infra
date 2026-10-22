@@ -125,6 +125,11 @@ class EndpointAccessTests(unittest.TestCase):
         self.assertIn("python ../scripts/newrelic_pipeline_guard.py check-plan", apply)
         self.assertIn("needs: plan", apply)
         self.assertIn("infra-tfplan-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}", apply)
+        init_step = apply.split("- name: Inicializar Terraform", 1)[1].split("- name:", 1)[0]
+        self.assertIn("working-directory: infra", init_step)
+        self.assertIn("terraform init -input=false -lockfile=readonly -reconfigure", init_step)
+        self.assertIn('backend-config="bucket=$TF_STATE_BUCKET"', init_step)
+        self.assertLess(apply.index("terraform init -input=false -lockfile=readonly"), apply.index("terraform apply -input=false infra.tfplan"))
         self.assertIn("terraform apply -input=false infra.tfplan", apply)
         self.assertNotIn("terraform plan", apply)
         self.assertIn("allow_destructive", content)
