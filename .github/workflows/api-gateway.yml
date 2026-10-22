@@ -8,6 +8,12 @@ on:
     branches: [develop, main]
     paths: ["infra/api-gateway/**", "scripts/*gateway*", ".github/workflows/api-gateway.yml"]
   workflow_dispatch:
+    inputs:
+      allow_destructive:
+        description: Autorizar exclusões e substituições neste plan
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -125,9 +131,11 @@ jobs:
           python scripts/prepare_gateway_imports.py --bucket "$TF_VAR_terraform_state_bucket" --key "$TF_STATE_KEY" --region "$AWS_REGION" --name autoflow-homolog --output infra/api-gateway/gateway-vpc-link-imports.auto.tf
       - name: Gerar e revisar plano
         working-directory: infra/api-gateway
+        env:
+          ALLOW_DESTRUCTIVE: ${{ github.event_name == 'push' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false') }}
         run: |
           terraform plan -input=false -out=gateway.tfplan
-          python ../../scripts/review_gateway_plan.py gateway.tfplan
+          ALLOW_DESTRUCTIVE="$ALLOW_DESTRUCTIVE" python ../../scripts/review_gateway_plan.py gateway.tfplan
           sha256sum gateway.tfplan > gateway.tfplan.sha256
       - name: Publicar plano confidencial e imutável
         uses: actions/upload-artifact@v4

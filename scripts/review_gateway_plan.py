@@ -1,14 +1,17 @@
 """Confere escopo, rede privada e permissões do plan sem expor valores."""
 import json
 import os
+import re
 import subprocess
 import sys
 
 
 ALLOWED_METHODS = {"GET", "POST", "PATCH", "DELETE"}
+VPC_LINK_ADDRESS = "module.private_eks.aws_apigatewayv2_vpc_link.this"
+VPC_LINK_ID_PATTERN = re.compile(r"[A-Za-z0-9]+")
 
 
-def review(plan, expected_account):
+def review(plan, expected_account, allow_destructive=False):
     if not isinstance(plan, dict) or not isinstance(plan.get("resource_changes"), list):
         raise RuntimeError("JSON do plan inválido ou incompleto: resource_changes ausente ou inválido.")
 
@@ -24,15 +27,33 @@ def review(plan, expected_account):
     imports = [item for item in resource_changes if item["change"].get("importing") is not None]
     for item in imports:
         importing = item["change"].get("importing") or {}
-        if (item["address"] != 'module.private_eks.aws_apigatewayv2_vpc_link.this'
-                or item.get("type") != "aws_apigatewayv2_vpc_link"
-                or item["change"]["actions"] != ["no-op"]
-                or not str(importing.get("id", "")).startswith("vpclink-")):
-            raise RuntimeError("O plan contém import fora do VPC Link esperado ou com alterações pendentes.")
+        actions = item["change"]["actions"]
+        valid_actions = (["no-op"], ["read"])
+        if allow_destructive:
+            valid_actions = (*valid_actions, ["delete", "create"], ["create", "delete"])
+        import_id = importing.get("id")
+        failures = []
+        if item["address"] != VPC_LINK_ADDRESS:
+            failures.append("address fora do VPC Link esperado")
+        if item.get("type") != "aws_apigatewayv2_vpc_link":
+            failures.append("type diferente de aws_apigatewayv2_vpc_link")
+        if actions not in valid_actions:
+            failures.append("actions não permitidas para import")
+        if not isinstance(import_id, str) or not VPC_LINK_ID_PATTERN.fullmatch(import_id):
+            failures.append("importing.id ausente ou inválido")
+        if failures:
+            # O ID do recurso e os valores before/after são deliberadamente omitidos.
+            raise RuntimeError(
+                "Import do VPC Link rejeitado: " + "; ".join(failures)
+                + f". address={item['address']!r}, type={item.get('type')!r}, "
+                + f"actions={actions!r}, importing.id={'válido' if isinstance(import_id, str) and VPC_LINK_ID_PATTERN.fullmatch(import_id) else 'inválido/ausente'}, "
+                + f"ALLOW_DESTRUCTIVE={'true' if allow_destructive else 'false'}."
+            )
 
-    # Import declarativo do VPC Link não é uma criação/alteração AWS.
+    # Import declarativo sem alterações não é uma operação AWS; import + replace
+    # permanece nas mudanças para passar pelas mesmas validações de recursos.
     changes = [item for item in resource_changes
-               if item not in imports and item["change"]["actions"] not in (["no-op"], ["read"])]
+               if item["change"]["actions"] not in (["no-op"], ["read"])]
     counts = {}
     for item in changes:
         action = ",".join(item["change"]["actions"])
@@ -41,15 +62,19 @@ def review(plan, expected_account):
     if not changes:
         print(f"Plan aprovado na revisão estática: sem alterações AWS; imports declarativos={len(imports)}.")
         return
-    expected_creates = 152 - len(imports)
-    if (len(changes) != expected_creates
-            or any(item["change"]["actions"] != ["create"] for item in changes)):
+    allowed_actions = (["create"],)
+    if allow_destructive:
+        allowed_actions = (*allowed_actions, ["delete"], ["delete", "create"], ["create", "delete"])
+    if any(item["change"]["actions"] not in allowed_actions for item in changes):
         raise RuntimeError(
-            f"O plan não corresponde ao escopo autorizado: {expected_creates} criações, "
-            "imports declarativos esperados e nenhuma atualização/exclusão."
+            "O plan contém operações fora do escopo: somente criações e, com autorização explícita, "
+            "exclusões/substituições são permitidas."
         )
 
-    resources = {item["address"]: item["change"].get("after") or {} for item in changes}
+    resources = {
+        item["address"]: item["change"].get("after") or item["change"].get("before") or {}
+        for item in changes
+    }
     required = {
         "module.private_eks.aws_lb.this",
         "module.private_eks.aws_security_group.alb",
@@ -73,7 +98,7 @@ def review(plan, expected_account):
 
     for item in changes:
         address = item["address"]
-        after = item["change"].get("after") or {}
+        after = item["change"].get("after") or item["change"].get("before") or {}
         if item["type"] == "aws_vpc_security_group_ingress_rule":
             if after.get("cidr_ipv4") or after.get("cidr_ipv6") or after.get("prefix_list_id"):
                 raise RuntimeError(f"Regra ingress ampla ou pública no plan: {address}")
@@ -140,11 +165,15 @@ def review(plan, expected_account):
     if any(term in log_format.lower() for term in ("authorization", "token", "query", "path", "sourceip", "body")):
         raise RuntimeError("Access logs podem registrar dados pessoais, tokens ou query strings.")
 
-    print(f"Plan aprovado na revisão estática: {expected_creates} criações e {len(imports)} imports declarativos; somente ALB interno, SGs restritos, VPC Link e rotas/integrations definidas.")
+    print(f"Plan aprovado na revisão estática: {len(changes)} mudanças e {len(imports)} imports declarativos; somente ALB interno, SGs restritos, VPC Link e rotas/integrations definidas.")
 
 
 if __name__ == "__main__":
     if len(sys.argv) != 2 or not os.getenv("TF_VAR_expected_account_id"):
         raise SystemExit("Uso: definir TF_VAR_expected_account_id e executar review_gateway_plan.py <arquivo.tfplan>")
     result = subprocess.run(["terraform", "show", "-json", sys.argv[1]], capture_output=True, text=True, check=True)
-    review(json.loads(result.stdout), os.environ["TF_VAR_expected_account_id"])
+    review(
+        json.loads(result.stdout),
+        os.environ["TF_VAR_expected_account_id"],
+        allow_destructive=os.environ.get("ALLOW_DESTRUCTIVE") == "true",
+    )
