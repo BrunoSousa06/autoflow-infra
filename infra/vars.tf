@@ -167,6 +167,23 @@ variable "newrelic_backend_memory_utilization_alert_query" {
   nullable    = false
 }
 
+variable "newrelic_api_gateway_dashboard_queries" {
+  description = "Consultas NRQL opcionais para métricas AWS API Gateway após integrar a conta AWS e confirmar os atributos no New Relic."
+  type = list(object({
+    title = string
+    query = string
+  }))
+  default  = []
+  nullable = false
+
+  validation {
+    condition = alltrue([for item in var.newrelic_api_gateway_dashboard_queries :
+      trimspace(item.title) != "" && trimspace(item.query) != ""
+    ])
+    error_message = "Cada widget opcional de API Gateway exige título e consulta NRQL não vazios."
+  }
+}
+
 variable "node_min_size" {
   description = "Quantidade mínima de nós do managed node group."
   type        = number

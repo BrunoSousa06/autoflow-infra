@@ -14,6 +14,11 @@ on:
         required: false
         type: boolean
         default: false
+      enable_detailed_gateway_metrics:
+        description: Habilitar métricas CloudWatch detalhadas por rota (pode gerar custo adicional)
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -63,6 +68,7 @@ jobs:
       TF_VAR_expected_account_id: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
       TF_VAR_terraform_state_bucket: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       TF_VAR_infra_state_key: ${{ vars.AWS_TF_STATE_KEY_INFRA }}
+      TF_VAR_enable_detailed_gateway_metrics: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_detailed_gateway_metrics && 'true' || 'false' }}
       TF_VAR_cors_origins: ${{ vars.API_GATEWAY_CORS_ORIGINS }}
       TF_VAR_lambda_function_name: ${{ vars.AWS_LAMBDA_FUNCTION_NAME }}
       TF_VAR_cluster_name: ${{ vars.EKS_CLUSTER_NAME }}
@@ -159,6 +165,7 @@ jobs:
       TF_VAR_expected_account_id: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
       TF_VAR_terraform_state_bucket: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       TF_VAR_infra_state_key: ${{ vars.AWS_TF_STATE_KEY_INFRA }}
+      TF_VAR_enable_detailed_gateway_metrics: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_detailed_gateway_metrics && 'true' || 'false' }}
       TF_VAR_cluster_name: ${{ vars.EKS_CLUSTER_NAME }}
       TF_VAR_nodegroup_name: ${{ vars.EKS_NODEGROUP_NAME }}
       TF_STATE_KEY: ${{ vars.AWS_TF_STATE_KEY_GATEWAY }}

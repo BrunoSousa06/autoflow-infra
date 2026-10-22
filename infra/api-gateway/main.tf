@@ -114,7 +114,7 @@ resource "aws_apigatewayv2_stage" "this" {
   default_route_settings {
     throttling_burst_limit   = 100
     throttling_rate_limit    = 50
-    detailed_metrics_enabled = false
+    detailed_metrics_enabled = var.enable_detailed_gateway_metrics
   }
   route_settings {
     route_key                = "POST /auth/login"

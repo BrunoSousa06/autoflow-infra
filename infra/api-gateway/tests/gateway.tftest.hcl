@@ -44,8 +44,24 @@ run "contratos_e_isolamento" {
     error_message = "Permissão de invocação deve restringir principal e conta."
   }
   assert {
+    condition     = aws_apigatewayv2_stage.this.default_route_settings[0].detailed_metrics_enabled == false
+    error_message = "Métricas detalhadas por rota devem permanecer desabilitadas por padrão até aprovação de custo."
+  }
+  assert {
+    condition     = aws_apigatewayv2_stage.this.route_settings[0].detailed_metrics_enabled == true
+    error_message = "A rota de login deve preservar sua configuração explícita de métricas detalhadas."
+  }
+  assert {
     condition     = !strcontains(aws_apigatewayv2_stage.this.access_log_settings[0].format, "$context.path") && !strcontains(aws_apigatewayv2_stage.this.access_log_settings[0].format, "sourceIp")
     error_message = "Logs não podem incluir path real ou IP."
+  }
+}
+run "metricas_detalhadas_aprovadas" {
+  command = plan
+  variables { enable_detailed_gateway_metrics = true }
+  assert {
+    condition     = aws_apigatewayv2_stage.this.default_route_settings[0].detailed_metrics_enabled == true
+    error_message = "A opção aprovada deve habilitar métricas detalhadas nas rotas padrão."
   }
 }
 run "cors_explicito" {

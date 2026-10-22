@@ -143,4 +143,29 @@ resource "newrelic_one_dashboard" "autoflow" {
       }
     }
   }
+
+  dynamic "page" {
+    for_each = length(var.newrelic_api_gateway_dashboard_queries) == 0 ? [] : [var.newrelic_api_gateway_dashboard_queries]
+
+    content {
+      name = "API Gateway ${var.newrelic_environment}"
+
+      dynamic "widget_line" {
+        for_each = page.value
+        iterator = gateway_widget
+
+        content {
+          title  = gateway_widget.value.title
+          row    = 1 + floor(gateway_widget.key / 2) * 3
+          column = gateway_widget.key % 2 == 0 ? 1 : 7
+          width  = 6
+          height = 3
+
+          nrql_query {
+            query = gateway_widget.value.query
+          }
+        }
+      }
+    }
+  }
 }
