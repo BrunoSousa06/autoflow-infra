@@ -248,7 +248,7 @@ jobs:
         with:
           name: infra-tfplan-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
           path: infra
-      - name: Conferir vínculo, integridade e descriptografar plan aprovado
+      - name: Conferir vínculo e integridade do plan aprovado
         working-directory: infra
         run: |
           set -euo pipefail
@@ -256,13 +256,17 @@ jobs:
           sha256sum --check infra.tfplan.sha256
           python ../scripts/newrelic_pipeline_guard.py verify-fingerprint infra-newrelic-inputs.sha256
           gpg --batch --yes --decrypt --passphrase "$PLAN_ENCRYPTION_PASSPHRASE" --output infra.tfplan infra.tfplan.gpg
+      - name: Inicializar Terraform
+        working-directory: infra
+        run: terraform init -input=false -lockfile=readonly -reconfigure -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+      - name: Inspecionar plan aprovado e validar guards
+        working-directory: infra
+        run: |
+          set -euo pipefail
           terraform show -json infra.tfplan > infra-plan.json
           python ../scripts/newrelic_pipeline_guard.py check-plan infra-plan.json
           python ../scripts/review_eks_plan.py infra-plan.json --allow-destructive "$ALLOW_DESTRUCTIVE"
           rm -f infra-plan.json
-      - name: Inicializar Terraform
-        working-directory: infra
-        run: terraform init -input=false -lockfile=readonly -reconfigure -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
       - name: Confirmar referência da License Key no Kubernetes
         if: env.TF_VAR_enable_newrelic_kubernetes == 'true'
         run: |
