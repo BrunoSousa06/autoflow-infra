@@ -113,6 +113,9 @@ jobs:
           python scripts/verify_aws_account.py
           echo "ip=$(curl -4fsS https://checkip.amazonaws.com | tr -d '\n')" >> "$GITHUB_OUTPUT"
           test -n "$PLAN_ENCRYPTION_PASSPHRASE"
+      - name: Detectar EKS antes do Plan
+        id: eks_preflight
+        run: python scripts/eks_cluster_preflight.py --cluster "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
       - name: Verificar/bootstrap seguro do bucket de Terraform State
         env:
           AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
@@ -148,11 +151,18 @@ jobs:
         run: python ../scripts/diagnose_terraform_providers.py
       - name: Gerar plan e registrar ações de destruição/substituição
         id: plan
+        env:
+          EKS_EXISTS: ${{ steps.eks_preflight.outputs.exists }}
+          EKS_CLUSTER_EXISTS: ${{ steps.eks_preflight.outputs.exists }}
         working-directory: infra
         run: |
           set -euo pipefail
           python ../scripts/newrelic_pipeline_guard.py fingerprint infra-newrelic-inputs.sha256
-          terraform plan -input=false -no-color -out=infra.tfplan
+          PLAN_ARGS=()
+          if [ "$EKS_EXISTS" != true ]; then
+            PLAN_ARGS+=(-var=enable_newrelic_kubernetes=false)
+          fi
+          terraform plan -input=false -no-color "${PLAN_ARGS[@]}" -out=infra.tfplan
           terraform show -json infra.tfplan > infra-plan.json
           python ../scripts/newrelic_pipeline_guard.py check-plan infra-plan.json
           python ../scripts/review_eks_plan.py infra-plan.json --allow-destructive "$ALLOW_DESTRUCTIVE"
@@ -241,6 +251,9 @@ jobs:
         run: |
           set -euo pipefail
           echo "ip=$(curl -4fsS https://checkip.amazonaws.com | tr -d '\n')" >> "$GITHUB_OUTPUT"
+      - name: Detectar EKS antes do Apply
+        id: eks_preflight
+        run: python scripts/eks_cluster_preflight.py --cluster "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
       - name: Atualizar endpoint e aguardar conclusão
         env:
           RUNNER_IP: ${{ steps.runner.outputs.ip }}
@@ -269,6 +282,8 @@ jobs:
           terraform init -input=false -lockfile=readonly -reconfigure -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
       - name: Inspecionar plan aprovado e validar guards
         working-directory: infra
+        env:
+          EKS_CLUSTER_EXISTS: ${{ steps.eks_preflight.outputs.exists }}
         run: |
           set -euo pipefail
           terraform show -json infra.tfplan > infra-plan.json
@@ -276,7 +291,7 @@ jobs:
           python ../scripts/review_eks_plan.py infra-plan.json --allow-destructive "$ALLOW_DESTRUCTIVE"
           rm -f infra-plan.json
       - name: Confirmar referência da License Key no Kubernetes
-        if: env.TF_VAR_enable_newrelic_kubernetes == 'true'
+        if: env.TF_VAR_enable_newrelic_kubernetes == 'true' && steps.eks_preflight.outputs.exists == 'true'
         run: |
           set -euo pipefail
           aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" >/dev/null

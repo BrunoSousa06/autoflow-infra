@@ -65,6 +65,27 @@ class NewRelicPipelineGuardTests(unittest.TestCase):
         with self.assertRaisesRegex(ConfigurationError, "sem workflow_dispatch"):
             check_plan(plan, self.environment)
 
+    def test_reset_allows_only_stale_helm_state_to_be_removed_while_eks_is_absent(self):
+        self.enabled_configuration()
+        self.environment["EKS_CLUSTER_EXISTS"] = "false"
+        plan = {
+            "resource_changes": [
+                {"address": "helm_release.newrelic_kubernetes[0]", "type": "helm_release", "change": {"actions": ["delete"]}}
+            ]
+        }
+        check_plan(plan, self.environment)
+
+    def test_enabled_release_deletion_still_fails_when_eks_exists(self):
+        self.enabled_configuration()
+        self.environment["EKS_CLUSTER_EXISTS"] = "true"
+        plan = {
+            "resource_changes": [
+                {"address": "helm_release.newrelic_kubernetes[0]", "type": "helm_release", "change": {"actions": ["delete"]}}
+            ]
+        }
+        with self.assertRaisesRegex(ConfigurationError, "ainda habilitados"):
+            check_plan(plan, self.environment)
+
     def test_explicit_deactivation_approval_allows_release_removal(self):
         self.enabled_configuration()
         self.environment["TF_VAR_enable_newrelic_kubernetes"] = "false"
@@ -106,6 +127,25 @@ class NewRelicPipelineGuardTests(unittest.TestCase):
         result = SimpleNamespace(returncode=0, stdout='{"data":{}}', stderr="")
         with patch("newrelic_pipeline_guard.subprocess.run", return_value=result):
             with self.assertRaisesRegex(ConfigurationError, "chave configurada está ausente"):
+                verify_kubernetes_secret(self.environment)
+
+    def test_empty_or_invalid_secret_value_is_rejected(self):
+        for encoded in ("", "not-base64", "===="):
+            result = SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"data": {"licenseKey": encoded}}),
+                stderr="",
+            )
+            with self.subTest(encoded=encoded), patch(
+                "newrelic_pipeline_guard.subprocess.run", return_value=result
+            ):
+                with self.assertRaises(ConfigurationError):
+                    verify_kubernetes_secret(self.environment)
+
+    def test_failed_license_bootstrap_leaves_no_usable_secret_and_blocks_installation(self):
+        failed_bootstrap = SimpleNamespace(returncode=1, stdout="", stderr="bootstrap failed")
+        with patch("newrelic_pipeline_guard.subprocess.run", return_value=failed_bootstrap):
+            with self.assertRaisesRegex(ConfigurationError, "Secret New Relic ausente"):
                 verify_kubernetes_secret(self.environment)
 
     def test_fingerprint_changes_when_flags_or_environment_config_changes(self):

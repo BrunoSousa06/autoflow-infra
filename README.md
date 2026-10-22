@@ -10,6 +10,8 @@ Para configurar Actions e inputs Terraform, consulte o [catálogo de variables e
 
 Para investigar nós EC2 que não registram no Kubernetes, consulte o [runbook de diagnóstico e recuperação EKS](docs/eks-node-recovery.md). O procedimento é somente leitura até a seção explícita de recuperação manual; não há reboot automatizado.
 
+Para reconstruir VPC/EKS após reset do Learner Lab sem tentar Helm antes da criação do cluster, siga o [runbook de primeiro provisionamento EKS](docs/eks-primeiro-provisionamento.md).
+
 Para diagnóstico dos nós EKS, consulte o [runbook](docs/eks-node-recovery.md). O provisionamento da EC2 runner está descrito em [Runner privado do GitHub Actions](docs/github-runner.md).
 
 ## Responsabilidades

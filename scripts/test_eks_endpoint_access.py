@@ -178,6 +178,14 @@ class EndpointAccessTests(unittest.TestCase):
             self.assertFalse(cleanup_if_lease_exists(aws, "eks-autoflow", "us-east-1"))
         self.assertEqual(aws.calls, [])
 
+    def test_reset_cluster_discards_only_the_stale_lease_without_endpoint_mutation(self):
+        lease = {"temporary_cidr": "198.51.100.7/32", "original_cidrs": ["189.6.8.245/32"]}
+        with patch("eks_endpoint_access.cluster_config", return_value=None), patch(
+            "eks_endpoint_access.remove_lease"
+        ) as remove_lease:
+            cleanup(FakeAws(set()), "eks-autoflow", "us-east-1", lease)
+        remove_lease.assert_called_once_with()
+
     def test_s3_missing_key_and_404_are_treated_as_absent_lease(self):
         errors = (
             "fatal error: An error occurred (NoSuchKey) when calling the HeadObject operation",
