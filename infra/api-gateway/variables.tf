@@ -48,3 +48,8 @@ variable "alarm_actions" {
   default     = []
   description = "ARNs de tópicos SNS existentes e autorizados. Vazio mantém alarmes consultáveis sem notificações."
 }
+variable "enable_detailed_gateway_metrics" {
+  type        = bool
+  default     = false
+  description = "Habilita métricas CloudWatch detalhadas por rota HTTP API; pode aumentar custos AWS. Habilitar após aprovação."
+}

@@ -91,8 +91,11 @@ class EndpointAccessTests(unittest.TestCase):
         self.assertIn("cancel-in-progress: false", content)
         plan = content.split("  plan:", 1)[1].split("  apply:", 1)[0]
         apply = content.split("\n  apply:\n", 1)[1]
-        self.assertNotIn("environment:", plan)
-        self.assertIn("environment: homolog", apply)
+        selected_environment = "environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}"
+        self.assertIn(selected_environment, plan)
+        self.assertIn(selected_environment, apply)
+        self.assertIn("AWS_REGION: ${{ vars.AWS_REGION }}", plan)
+        self.assertIn("AWS_REGION: ${{ vars.AWS_REGION }}", apply)
         self.assertIn("required_reviewers", apply)
 
     def test_develop_push_plans_and_applies_only_after_environment_approval(self):
@@ -101,17 +104,25 @@ class EndpointAccessTests(unittest.TestCase):
         content = workflow.read_text(encoding="utf-8")
         plan = content.split("  plan:", 1)[1].split("  apply:", 1)[0]
         apply = content.split("\n  apply:\n", 1)[1]
-        self.assertIn("if: github.ref == 'refs/heads/develop' && (github.event_name == 'push'", plan)
+        self.assertIn("if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/feature/')) && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')", plan)
         self.assertIn("default: true", content.split("approve_state_bucket_creation:", 1)[1].split("permissions:", 1)[0])
         self.assertIn("description: Autorizar exclusões/substituições após revisar o plan", content)
         self.assertIn("python ../scripts/review_eks_plan.py infra-plan.json --allow-destructive \"$ALLOW_DESTRUCTIVE\"", content)
         self.assertIn("default: false", content.split("allow_destructive:", 1)[1].split("permissions:", 1)[0])
-        self.assertIn("ALLOW_DESTRUCTIVE: ${{ github.event_name == 'push' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false') }}", plan)
+        self.assertIn("ALLOW_DESTRUCTIVE: ${{ (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && (github.event_name == 'push' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false')) || 'false' }}", plan)
         self.assertIn("ALLOW_DESTRUCTIVE: ${{ github.event_name == 'push' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false') }}", apply)
         self.assertIn("inputs.approve_state_bucket_creation || 'true'", plan)
         self.assertIn("github.event_name == 'push'", apply)
         self.assertIn("github.event_name == 'workflow_dispatch' && inputs.apply", apply)
-        self.assertIn("environment: homolog", apply)
+        self.assertIn("((github.ref == 'refs/heads/develop' && github.event_name == 'push') || ((github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'workflow_dispatch' && inputs.apply))", apply)
+        selected_environment = "environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}"
+        self.assertIn(selected_environment, apply)
+        self.assertIn("python scripts/verify_aws_account.py", plan)
+        self.assertIn("python scripts/verify_aws_account.py", apply)
+        self.assertIn("python scripts/newrelic_pipeline_guard.py validate", plan)
+        self.assertIn("python scripts/newrelic_pipeline_guard.py validate", apply)
+        self.assertIn("python ../scripts/newrelic_pipeline_guard.py check-plan", plan)
+        self.assertIn("python ../scripts/newrelic_pipeline_guard.py check-plan", apply)
         self.assertIn("needs: plan", apply)
         self.assertIn("infra-tfplan-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}", apply)
         self.assertIn("terraform apply -input=false infra.tfplan", apply)
