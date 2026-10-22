@@ -24,9 +24,11 @@ provider "aws" {
 
 provider "helm" {
   kubernetes = {
-    host                   = data.aws_eks_cluster.autoflow.endpoint
-    cluster_ca_certificate = base64decode(data.aws_eks_cluster.autoflow.certificate_authority[0].data)
-    token                  = data.aws_eks_cluster_auth.auth.token
+    host = var.enable_newrelic_kubernetes ? data.aws_eks_cluster.autoflow[0].endpoint : "https://127.0.0.1"
+    cluster_ca_certificate = var.enable_newrelic_kubernetes ? base64decode(
+      data.aws_eks_cluster.autoflow[0].certificate_authority[0].data
+    ) : null
+    token = var.enable_newrelic_kubernetes ? data.aws_eks_cluster_auth.auth[0].token : null
   }
 }
 

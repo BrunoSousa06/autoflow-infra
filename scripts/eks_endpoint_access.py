@@ -77,6 +77,10 @@ def authorize(aws, cluster, region, runner_ip, baseline):
 def cleanup(aws, cluster, region, lease):
     lease = validate_lease(lease)
     config = cluster_config(aws, cluster, region)
+    if config is None:
+        # O cluster foi recriado/resetado; a allowlist e o lease antigo não se aplicam.
+        remove_lease()
+        return
     current = set(config["publicAccessCidrs"])
     target = (current - {lease["temporary_cidr"]}) | set(lease["original_cidrs"])
     if target != current:

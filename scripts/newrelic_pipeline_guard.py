@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import hashlib
+import base64
+import binascii
 import os
 import re
 import subprocess
@@ -107,6 +109,7 @@ def _is_new_relic_change(resource: dict[str, Any]) -> bool:
 
 def check_plan(plan: dict[str, Any], environment: dict[str, str]) -> None:
     enabled_kubernetes, enabled_account = validate_inputs(environment)
+    eks_exists = environment.get("EKS_CLUSTER_EXISTS", "true") == "true"
     approved = environment.get("NEWRELIC_DEACTIVATION_APPROVED") == "true"
     deactivations: list[str] = []
 
@@ -119,7 +122,14 @@ def check_plan(plan: dict[str, Any], environment: dict[str, str]) -> None:
 
         resource_type = str(resource.get("type", ""))
         is_kubernetes_release = resource_type == "helm_release"
-        if (is_kubernetes_release and enabled_kubernetes) or (not is_kubernetes_release and enabled_account):
+        if is_kubernetes_release and not eks_exists:
+            # Em um reset, o release remoto desapareceu junto com o cluster;
+            # remover sua referência órfã do state não desativa um agente ativo.
+            continue
+        if (
+            (is_kubernetes_release and enabled_kubernetes and eks_exists)
+            or (not is_kubernetes_release and enabled_account)
+        ):
             raise ConfigurationError("O plan tenta remover recursos New Relic ainda habilitados; execução bloqueada.")
         deactivations.append(str(resource.get("address", "")))
 
@@ -149,6 +159,12 @@ def verify_kubernetes_secret(environment: dict[str, str]) -> None:
         encoded_value = data.get(secret_key)
         if not isinstance(encoded_value, str) or not encoded_value:
             raise ConfigurationError("A chave configurada está ausente no Secret Kubernetes.")
+        try:
+            decoded_value = base64.b64decode(encoded_value, validate=True)
+        except (ValueError, binascii.Error) as error:
+            raise ConfigurationError("A chave configurada no Secret Kubernetes é inválida.") from error
+        if not decoded_value:
+            raise ConfigurationError("A chave configurada está vazia no Secret Kubernetes.")
     except (AttributeError, json.JSONDecodeError) as error:
         raise ConfigurationError("Resposta Kubernetes inválida ao verificar Secret New Relic.") from error
 
