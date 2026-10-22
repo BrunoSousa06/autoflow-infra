@@ -18,6 +18,16 @@ class GatewayRoutesTest(unittest.TestCase):
         self.assertIn("environment: homolog", apply)
         self.assertIn("required_reviewers", apply)
 
+    def test_apply_initializes_locked_providers_before_applying_saved_plan(self):
+        workflow = (ROOT / ".github/workflows/api-gateway.yml").read_text(encoding="utf-8")
+        apply = workflow.split("  apply:", 1)[1]
+        init_step = apply.split("- name: Inicializar state exclusivo do gateway", 1)[1].split("- name:", 1)[0]
+        self.assertIn("working-directory: infra/api-gateway", init_step)
+        self.assertIn("terraform init -input=false -lockfile=readonly", init_step)
+        self.assertIn('backend-config="bucket=$TF_VAR_terraform_state_bucket"', init_step)
+        self.assertIn('backend-config="key=$TF_STATE_KEY"', init_step)
+        self.assertLess(apply.index("terraform init -input=false -lockfile=readonly"), apply.index("terraform apply -input=false gateway.tfplan"))
+
     def test_allowlist_corresponde_aos_controllers(self):
         controllers = list((APP / "backend/src/main/java/com/autoflow/presentation").rglob("*Controller.java"))
         self.assertTrue(controllers, "Disponibilize autoflow em AUTOFLOW_REPO")
