@@ -48,7 +48,7 @@ run "contratos_e_isolamento" {
     error_message = "Métricas detalhadas por rota devem permanecer desabilitadas por padrão até aprovação de custo."
   }
   assert {
-    condition     = aws_apigatewayv2_stage.this.route_settings[0].detailed_metrics_enabled == true
+    condition     = anytrue([for setting in aws_apigatewayv2_stage.this.route_settings : setting.route_key == "POST /auth/login" && setting.detailed_metrics_enabled])
     error_message = "A rota de login deve preservar sua configuração explícita de métricas detalhadas."
   }
   assert {
