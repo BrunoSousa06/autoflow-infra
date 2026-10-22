@@ -51,6 +51,30 @@ class ProviderIntegrityWorkflowTests(unittest.TestCase):
                 self.assertIn('"h1:', block)
                 self.assertIn('"zh:', block)
 
+    def test_plan_diagnoses_provider_installation_after_init_without_dumping_secrets(self):
+        init_position = self.plan.index("- name: Inicializar Terraform")
+        diagnostic_position = self.plan.index("- name: Diagnosticar integridade dos providers Terraform")
+        plan_position = self.plan.index("- name: Gerar plan e registrar ações de destruição/substituição")
+        diagnostic = (ROOT / "scripts/diagnose_terraform_providers.py").read_text(encoding="utf-8")
+
+        self.assertLess(init_position, diagnostic_position)
+        self.assertLess(diagnostic_position, plan_position)
+        for evidence in (
+            "terraform version",
+            "terraform providers",
+            "TF_PLUGIN_CACHE_DIR",
+            "TF_DATA_DIR",
+            "TF_CLI_CONFIG_FILE",
+            "terraform providers",
+            "schema",
+            "SHA-256 do lockfile",
+            "platform.machine()",
+            "terraform-provider-*",
+        ):
+            self.assertIn(evidence, diagnostic)
+        self.assertNotIn("TF_VAR_", diagnostic)
+        self.assertNotIn("terraform show", diagnostic)
+
 
 if __name__ == "__main__":
     unittest.main()

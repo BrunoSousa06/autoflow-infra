@@ -143,6 +143,9 @@ jobs:
         env:
           OPERATOR_ROLE_ARN: ${{ vars.AWS_EKS_OPERATOR_ACCESS_ROLE_ARN }}
         run: python scripts/prepare_eks_access_imports.py --cluster "$EKS_CLUSTER_NAME" --principal "$OPERATOR_ROLE_ARN" --region "$AWS_REGION" --output infra/eks-access-imports.auto.tf
+      - name: Diagnosticar integridade dos providers Terraform
+        working-directory: infra
+        run: python ../scripts/diagnose_terraform_providers.py
       - name: Gerar plan e registrar ações de destruição/substituição
         id: plan
         working-directory: infra
