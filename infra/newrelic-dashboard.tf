@@ -44,7 +44,7 @@ resource "newrelic_one_dashboard" "autoflow" {
     }
 
     widget_line {
-      title  = "Latência de API (p50/p95/p99, segundos)"
+      title  = "autoflow-backend latency (p50/p95/p99, seconds)"
       row    = 4
       column = 7
       width  = 6
@@ -148,7 +148,7 @@ resource "newrelic_one_dashboard" "autoflow" {
     for_each = length(var.newrelic_api_gateway_dashboard_queries) == 0 ? [] : [var.newrelic_api_gateway_dashboard_queries]
 
     content {
-      name = "API Gateway ${var.newrelic_environment}"
+      name = "AutoFlow API Gateway ${var.newrelic_environment}"
 
       dynamic "widget_line" {
         for_each = page.value

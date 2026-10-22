@@ -7,8 +7,13 @@ resource "newrelic_alert_policy" "autoflow" {
 
   lifecycle {
     precondition {
-      condition     = var.newrelic_account_id != null && var.newrelic_region != null && var.newrelic_api_key != null && var.newrelic_api_key != ""
-      error_message = "Habilitar recursos New Relic exige account ID, região aprovada e API key fornecida fora dos arquivos."
+      condition = alltrue([
+        var.newrelic_account_id != null,
+        var.newrelic_region != null,
+        var.newrelic_api_key != null && var.newrelic_api_key != "",
+        var.newrelic_environment != null && trimspace(var.newrelic_environment) != "",
+      ])
+      error_message = "Recursos de conta New Relic exigem account ID, região, API key e identificadores configurados no environment."
     }
   }
 }

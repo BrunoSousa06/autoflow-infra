@@ -10,13 +10,6 @@ nri-kube-events:
 newrelic-logging:
   enabled: true
   lowDataMode: true
-  fluentBit:
-    config:
-      extraFilters: |-
-        [FILTER]
-            Name   grep
-            Match  kube.*
-            Regex  $kubernetes['namespace_name'] ^default$
 
 kube-state-metrics:
   enabled: true

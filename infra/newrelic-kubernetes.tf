@@ -18,6 +18,18 @@ resource "helm_release" "newrelic_kubernetes" {
         customSecretName       = var.newrelic_license_secret_name
         customSecretLicenseKey = var.newrelic_license_secret_key
       }
+      "newrelic-logging" = {
+        fluentBit = {
+          config = {
+            extraFilters = <<-FILTER
+              [FILTER]
+                  Name   grep
+                  Match  kube.*
+                  Regex  $kubernetes['namespace_name'] ^${var.newrelic_namespace}$
+            FILTER
+          }
+        }
+      }
   })]
 
   depends_on = [

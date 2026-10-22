@@ -69,14 +69,14 @@ variable "enable_newrelic_account_resources" {
 }
 
 variable "newrelic_account_id" {
-  description = "Account ID não secreto da conta New Relic; pode ser fornecido por TF_VAR_newrelic_account_id."
+  description = "Account ID não secreto da conta New Relic, fornecido pelo environment GitHub aprovado."
   type        = number
   default     = null
   nullable    = true
 }
 
 variable "newrelic_api_key" {
-  description = "New Relic user API key for Terraform provider; supply externally via TF_VAR_newrelic_api_key, never a tfvars file."
+  description = "API key do provider New Relic, fornecida pelo GitHub Secret do environment; nunca por tfvars."
   type        = string
   default     = null
   sensitive   = true
@@ -84,39 +84,59 @@ variable "newrelic_api_key" {
 }
 
 variable "newrelic_region" {
-  description = "Região New Relic aprovada (US ou EU); vazio usa configuração externa do provider."
+  description = "Região New Relic aprovada (US ou EU), fornecida pelo environment GitHub."
   type        = string
   default     = null
   nullable    = true
+
+  validation {
+    condition     = var.newrelic_region == null || contains(["US", "EU"], var.newrelic_region)
+    error_message = "newrelic_region deve ser US ou EU quando fornecida."
+  }
 }
 
 variable "newrelic_namespace" {
-  description = "Namespace do release e dos workloads AutoFlow; manifests existentes sem namespace caem em default."
+  description = "Namespace Kubernetes compartilhado pela integração New Relic; usa o namespace padrão do workload."
   type        = string
   default     = "default"
 
   validation {
-    condition     = can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.newrelic_namespace))
+    condition     = length(var.newrelic_namespace) <= 63 && can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.newrelic_namespace))
     error_message = "newrelic_namespace precisa ser um nome de namespace Kubernetes válido."
   }
 }
 
 variable "newrelic_license_secret_name" {
-  description = "Nome do Secret Kubernetes que será entregue pelo mecanismo externo aprovado; nenhum conteúdo é provisionado aqui."
+  description = "Nome do Secret Kubernetes externo; somente a referência é provisionada."
   type        = string
   default     = "newrelic-license"
+
+  validation {
+    condition     = length(var.newrelic_license_secret_name) <= 63 && can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.newrelic_license_secret_name))
+    error_message = "newrelic_license_secret_name precisa ser um nome Kubernetes válido."
+  }
 }
 
 variable "newrelic_license_secret_key" {
-  description = "Chave dentro do Secret Kubernetes externo contendo a license key New Relic."
+  description = "Chave dentro do Secret Kubernetes externo contendo a license key."
   type        = string
   default     = "licenseKey"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9._-]+$", var.newrelic_license_secret_key))
+    error_message = "newrelic_license_secret_key não pode ser vazia quando fornecida."
+  }
 }
 
 variable "newrelic_environment" {
-  description = "Environment tag usado em NRQL; confirmar com os owners antes de habilitar os recursos na conta."
+  description = "Ambiente selecionado pelo GitHub Actions; local é o fallback de desenvolvimento."
   type        = string
   default     = "local"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$", var.newrelic_environment))
+    error_message = "newrelic_environment deve ser um rótulo simples fornecido pelo Environment."
+  }
 }
 
 variable "newrelic_synthetic_url" {

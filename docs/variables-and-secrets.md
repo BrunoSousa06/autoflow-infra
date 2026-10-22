@@ -1,6 +1,6 @@
 # Variables e secrets
 
-Inventário observado nos workflows e Terraform deste repositório. Deploy implementado somente para `homolog`; produção é planejada para outra branch. CI não requer acesso AWS. Terraform Plan usa Repository Secrets/Variables sem Environment; somente Apply usa o Environment `homolog`. Required reviewers devem ser configurados no próprio GitHub.
+Inventário observado nos workflows e Terraform deste repositório. `develop` usa o Environment `homolog`; `main` usa `production` para Plan e só aplica em dispatch manual, com os reviewers efetivos desse Environment. Cada Environment fornece configurações New Relic independentes. CI de PR não requer acesso AWS.
 
 ## GitHub Actions — Secrets
 
@@ -9,6 +9,7 @@ Inventário observado nos workflows e Terraform deste repositório. Deploy imple
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | Secrets; sessão temporária AWS | Repository Secrets; mesma sessão AWS Academy Learner Lab | CD | Não aplicável | `.github/workflows/pipeline.yml`, `api-gateway.yml`; usados pelos jobs de Plan e Apply, sem defaults. |
 | `AUTOFLOW_READ_TOKEN` | Secret opcional para checkout do contrato `autoflow` | GitHub Repository secret; token de leitura se o repo for privado | CI de gateway | Não aplicável | `api-gateway.yml`; fallback `${{ github.token }}`. Se token padrão tiver acesso, não cadastrar. |
 | `GITHUB_TOKEN` (`github.token`) | Token automático de checkout pelo workflow | Gerado pelo GitHub; não cadastrar | CI | Não aplicável | `api-gateway.yml`; default para checkout do contrato. |
+| `NEW_RELIC_API_KEY` | User API key do provider New Relic; diferente da License Key de ingestão | GitHub Secret separado por Environment | Terraform Plan/Apply | Não aplicável | `pipeline.yml` → `TF_VAR_newrelic_api_key`; variável de ambiente sensível, ausente de argumentos/logs. |
 
 ## GitHub Actions — Variables
 
@@ -26,8 +27,12 @@ Inventário observado nos workflows e Terraform deste repositório. Deploy imple
 | `AUTOFLOW_REPOSITORY` | Repositório de contrato verificado pelo CI | GitHub Repository Variable | CI, opcional | `organizacao/autoflow` | `api-gateway.yml`; default `${{ format('{0}/autoflow', github.repository_owner) }}`. |
 | `AUTOFLOW_CONTRACT_REF` | Ref de contrato | GitHub Repository Variable | CI, opcional | `develop` | `api-gateway.yml`; default `develop`. |
 | `TERRAFORM_APPLY_APPROVAL_CONFIGURED` | Guard adicional de Apply | Repository Variable; marcar `true` somente após configurar Required reviewers no Environment `homolog` | CD se `apply/deploy=true` | `true` | Os dois workflows; ausente/diferente bloqueia Apply. Não substitui proteção real do Environment. |
+| `ENABLE_NEWRELIC_KUBERNETES`, `ENABLE_NEWRELIC_ACCOUNT_RESOURCES` | Ativam separadamente a integração Kubernetes e os recursos da conta | GitHub Variables opcionais de cada Environment | Plan/Apply | `false` | O workflow usa `false` se ausentes. Para habilitar homologação, configurar `true` após aprovação; não são inputs de dispatch. Exclusão requer dispatch Apply com `allow_destructive=true` e Required reviewers. |
+| `NEW_RELIC_ACCOUNT_ID`, `NEW_RELIC_REGION`, `NEW_RELIC_API_KEY` | Account ID, região New Relic e User API key do provider | Variables e Secret do Environment `homolog` | Plan/Apply de recursos de conta | Não aplicável | Obrigatórios somente quando `ENABLE_NEWRELIC_ACCOUNT_RESOURCES=true`; não são necessários para instalar apenas a integração Kubernetes. |
+| `NEW_RELIC_SYNTHETIC_URL`, `NEW_RELIC_SYNTHETIC_LOCATIONS_JSON` | Endpoint e locations do Synthetic | Variables opcionais do Environment | Plan/Apply de recursos de conta | URL vazia e `[]` | Devem ser fornecidas juntas; ausentes deixam monitor desabilitado. |
+| `NEW_RELIC_API_GATEWAY_DASHBOARD_QUERIES_JSON` | Lista JSON com títulos e NRQL de métricas AWS API Gateway já observadas | GitHub Variable de cada Environment alvo | Plan/Apply | Lista vazia | Opcional; queries validadas são consumidas pela página do dashboard. Não provisiona integração AWS↔New Relic nem altera o API Gateway. |
 
-Secrets e variables consumidos tanto pelo Plan quanto pelo Apply devem existir como Repository Secrets/Variables. Não cadastre cópias desses mesmos nomes no Environment `homolog`, pois os valores do Environment podem prevalecer para o job Apply. Reserve o Environment exclusivamente para Required reviewers e regras de deployment.
+`NEW_RELIC_API_KEY` é Secret; os demais inputs desta tabela são Variables não sensíveis. `newrelic_environment` é derivado do Environment GitHub já selecionado (`homolog`/`production`). O cluster usa `EKS_CLUSTER_NAME`, e `default`, `newrelic-license`, `licenseKey`, `newrelic-kubernetes` e `autoflow-backend` são defaults técnicos compartilhados com a aplicação. Os outros secrets/variables AWS existentes continuam no escopo já configurado.
 
 ## Terraform inputs
 
@@ -46,6 +51,11 @@ Secrets e variables consumidos tanto pelo Plan quanto pelo Apply devem existir c
 | `cluster_endpoint_private_access`, `cluster_endpoint_public_access` | Opcionais; `true`, `true` | Acesso endpoint EKS. |
 | `cluster_endpoint_public_access_cidrs` | Opcional; default `189.6.8.245/32`; validação exige CIDR se endpoint público habilitado | CIDR permanente inicial do endpoint. Terraform ignora drift nesse atributo; o workflow gerencia o `/32` temporário do runner e preserva os CIDRs preexistentes ao limpar o lease. |
 | `create_nat_gateway`, `create_operator_access_entry` | Opcionais; `true`, `true` | Controlam criação de recursos. |
+| `enable_newrelic_kubernetes`, `enable_newrelic_account_resources` | Opcionais localmente; defaults `false` | Ativação New Relic por Environment, nunca habilitada por default global. |
+| `newrelic_account_id`, `newrelic_region`, `newrelic_api_key` | IDs/região nulos localmente; key sensível e nula | Provider `newrelic/newrelic`; inputs GitHub Environment. |
+| `newrelic_environment` | Opcional; `local` | Workflow injeta o Environment GitHub selecionado. |
+| `newrelic_namespace`, `newrelic_license_secret_name`, `newrelic_license_secret_key` | Defaults `default`, `newrelic-license`, `licenseKey` | Referências técnicas; nenhum valor de licença está em Terraform. |
+| `newrelic_synthetic_url`, `newrelic_synthetic_locations` | URL vazia e lista vazia localmente | Variables opcionais do Environment; nenhum URL/location fixo. |
 
 ### Root API Gateway (`infra/api-gateway/variables.tf`)
 
