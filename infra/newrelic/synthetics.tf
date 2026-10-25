@@ -28,8 +28,6 @@ resource "newrelic_nrql_alert_condition" "synthetic_failure" {
   aggregation_delay            = 300
   fill_option                  = "none"
 
-  # Uma janela de cinco minutos por execução do monitor. Exige falha nas duas
-  # janelas consecutivas; execuções bem-sucedidas retornam zero por filter(count()).
   nrql {
     query = "SELECT filter(count(*), WHERE result = 'FAILED') FROM SyntheticCheck WHERE monitorName = '${local.newrelic_synthetic_monitor_name}'"
   }

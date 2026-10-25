@@ -13,7 +13,8 @@ class GatewayRoutesTest(unittest.TestCase):
     def test_manual_dispatch_runs_plan_and_approved_apply_on_develop(self):
         workflow = (ROOT / ".github/workflows/api-gateway.yml").read_text(encoding="utf-8")
         plan, apply = workflow.split("  plan:", 1)[1].split("  apply:", 1)[0], workflow.split("  apply:", 1)[1]
-        self.assertIn("(github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/heads/feature/')) && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')", plan)
+        self.assertIn("github.ref == 'refs/heads/develop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')", plan)
+        self.assertNotIn("refs/heads/feature/", plan)
         self.assertIn("github.ref == 'refs/heads/develop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')", apply)
         self.assertIn("environment: homolog", apply)
         self.assertIn("required_reviewers", apply)

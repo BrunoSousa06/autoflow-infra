@@ -18,6 +18,14 @@ ACCOUNT_ID_PATTERN = re.compile(r"[1-9][0-9]*\Z")
 AWS_ACCOUNT_ID_PATTERN = re.compile(r"[0-9]{12}\Z")
 FINGERPRINT_INPUTS = (
     "AWS_EXPECTED_ACCOUNT_ID",
+    "AWS_REGION",
+    "EKS_CLUSTER_NAME",
+    "AWS_TF_STATE_KEY_INFRA",
+    "AWS_TF_STATE_KEY_NEWRELIC",
+    "TF_STATE_BUCKET",
+    "TF_VAR_aws_region",
+    "TF_VAR_aws_allowed_account_ids",
+    "TF_VAR_eks_cluster_name",
     "TF_VAR_enable_newrelic_kubernetes",
     "TF_VAR_enable_newrelic_account_resources",
     "TF_VAR_newrelic_account_id",
@@ -139,6 +147,19 @@ def check_plan(plan: dict[str, Any], environment: dict[str, str]) -> None:
         )
 
 
+def check_legacy_root_plan(plan: dict[str, Any]) -> None:
+    """Bloqueia exclusões residuais do root legado até transferência aprovada."""
+    if any(
+        _is_new_relic_change(resource)
+        and "delete" in set(resource.get("change", {}).get("actions", []))
+        for resource in plan.get("resource_changes", [])
+    ):
+        raise ConfigurationError(
+            "O root legado ainda possui recursos New Relic no state; exclusões bloqueadas. "
+            "Execute o procedimento manual de migração com autorização explícita."
+        )
+
+
 def verify_kubernetes_secret(environment: dict[str, str]) -> None:
     namespace = "default"
     secret_name = "newrelic-license"
@@ -203,9 +224,15 @@ def main(arguments: list[str] | None = None) -> int:
             check_plan(plan, dict(os.environ))
             print("Plano sem remoção New Relic acidental.")
             return 0
+        if len(arguments) == 2 and arguments[0] == "check-legacy-plan":
+            plan = json.loads(Path(arguments[1]).read_text(encoding="utf-8"))
+            check_legacy_root_plan(plan)
+            print("Plan do root legado não remove recursos New Relic.")
+            return 0
         print(
             "Uso: newrelic_pipeline_guard.py validate | verify-secret | fingerprint <arquivo> | "
-            "verify-fingerprint <arquivo> | check-plan <terraform-plan.json>",
+            "verify-fingerprint <arquivo> | check-plan <terraform-plan.json> | "
+            "check-legacy-plan <terraform-plan.json>",
             file=sys.stderr,
         )
         return 2

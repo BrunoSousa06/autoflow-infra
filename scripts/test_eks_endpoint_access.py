@@ -104,7 +104,7 @@ class EndpointAccessTests(unittest.TestCase):
         content = workflow.read_text(encoding="utf-8")
         plan = content.split("  plan:", 1)[1].split("  apply:", 1)[0]
         apply = content.split("\n  apply:\n", 1)[1]
-        self.assertIn("if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/feature/')) && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')", plan)
+        self.assertIn("if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')", plan)
         self.assertIn("default: true", content.split("approve_state_bucket_creation:", 1)[1].split("permissions:", 1)[0])
         self.assertIn("description: Autorizar exclusões/substituições após revisar o plan", content)
         self.assertIn("python ../scripts/review_eks_plan.py infra-plan.json --allow-destructive \"$ALLOW_DESTRUCTIVE\"", content)
@@ -119,10 +119,9 @@ class EndpointAccessTests(unittest.TestCase):
         self.assertIn(selected_environment, apply)
         self.assertIn("python scripts/verify_aws_account.py", plan)
         self.assertIn("python scripts/verify_aws_account.py", apply)
-        self.assertIn("python scripts/newrelic_pipeline_guard.py validate", plan)
-        self.assertIn("python scripts/newrelic_pipeline_guard.py validate", apply)
-        self.assertIn("python ../scripts/newrelic_pipeline_guard.py check-plan", plan)
-        self.assertIn("python ../scripts/newrelic_pipeline_guard.py check-plan", apply)
+        self.assertNotIn("TF_VAR_enable_newrelic", plan)
+        self.assertIn("check-legacy-plan", plan)
+        self.assertIn("check-legacy-plan", apply)
         self.assertIn("needs: plan", apply)
         self.assertIn("infra-tfplan-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}", apply)
         download_position = apply.index("- uses: actions/download-artifact@v4")
@@ -130,7 +129,7 @@ class EndpointAccessTests(unittest.TestCase):
         decrypt_position = apply.index('gpg --batch --yes --decrypt --passphrase "$PLAN_ENCRYPTION_PASSPHRASE" --output infra.tfplan infra.tfplan.gpg')
         init_position = apply.index("- name: Inicializar Terraform")
         show_position = apply.index("terraform show -json infra.tfplan > infra-plan.json")
-        newrelic_guard_position = apply.index("python ../scripts/newrelic_pipeline_guard.py check-plan infra-plan.json", show_position)
+        newrelic_guard_position = apply.index("python ../scripts/newrelic_pipeline_guard.py check-legacy-plan infra-plan.json", show_position)
         eks_guard_position = apply.index('python ../scripts/review_eks_plan.py infra-plan.json --allow-destructive "$ALLOW_DESTRUCTIVE"', show_position)
         apply_position = apply.index("terraform apply -input=false infra.tfplan")
         self.assertLess(download_position, integrity_position)
@@ -143,7 +142,7 @@ class EndpointAccessTests(unittest.TestCase):
         integrity_step = apply.split("- name: Conferir vínculo e integridade do plan aprovado", 1)[1].split("- name:", 1)[0]
         self.assertIn('test "$(cat infra.tfplan.commit)" = "$GITHUB_SHA"', integrity_step)
         self.assertIn("sha256sum --check infra.tfplan.sha256", integrity_step)
-        self.assertIn("verify-fingerprint infra-newrelic-inputs.sha256", integrity_step)
+        self.assertNotIn("newrelic", integrity_step)
         self.assertNotIn("terraform show", integrity_step)
         init_step = apply.split("- name: Inicializar Terraform", 1)[1].split("- name:", 1)[0]
         self.assertIn("working-directory: infra", init_step)

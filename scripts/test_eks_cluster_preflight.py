@@ -27,31 +27,39 @@ class EksClusterPreflightTests(unittest.TestCase):
             with self.assertRaises(PreflightError):
                 cluster_exists("eks-autoflow", "us-east-1")
 
-    def test_workflow_uses_an_approved_plan_and_checks_license_only_for_existing_cluster(self):
+    def test_vpc_eks_root_is_separate_from_newrelic_installation(self):
         from pathlib import Path
 
         workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pipeline.yml").read_text(
             encoding="utf-8"
         )
-        infra = Path(__file__).resolve().parents[1] / "infra"
         plan = workflow.split("  plan:", 1)[1].split("  apply:", 1)[0]
         apply = workflow.split("\n  apply:\n", 1)[1]
-        data_sources = (infra / "data.tf").read_text(encoding="utf-8")
-        providers = (infra / "providers.tf").read_text(encoding="utf-8")
-        self.assertIn("id: eks_preflight", plan)
-        self.assertIn('PLAN_ARGS+=(-var=enable_newrelic_kubernetes=false)', plan)
-        self.assertEqual(data_sources.count("count = var.enable_newrelic_kubernetes ? 1 : 0"), 2)
-        self.assertIn(' : "https://127.0.0.1"', providers)
-        self.assertIn('EKS_CLUSTER_EXISTS: ${{ steps.eks_preflight.outputs.exists }}', plan)
-        self.assertIn(
-            "if: env.TF_VAR_enable_newrelic_kubernetes == 'true' && steps.eks_preflight.outputs.exists == 'true'",
-            apply,
-        )
+        root = Path(__file__).resolve().parents[1] / "infra"
+        nr_workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/newrelic.yml").read_text(encoding="utf-8")
+        self.assertNotIn("helm_release", "\n".join(path.read_text(encoding="utf-8") for path in root.glob("*.tf")))
+        self.assertNotIn("TF_VAR_enable_newrelic", plan)
+        self.assertIn("helm_release", (root / "newrelic/kubernetes.tf").read_text(encoding="utf-8"))
+        self.assertIn("verify-secret", nr_workflow)
+        self.assertIn("check-legacy-plan", workflow)
         self.assertIn("needs: plan", apply)
         self.assertIn("required_reviewers", apply)
         self.assertIn("terraform apply -input=false infra.tfplan", apply)
         self.assertNotIn("terraform apply -target", workflow)
         self.assertNotIn("terraform plan", apply)
+
+    def test_newrelic_plan_configures_kube_access_before_secret_and_helm_checks(self):
+        from pathlib import Path
+
+        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/newrelic.yml").read_text(encoding="utf-8")
+        plan = workflow.split("  plan:", 1)[1].split("\n  apply:\n", 1)[0]
+        authorize = plan.index("eks_endpoint_access.py authorize")
+        kubeconfig = plan.index("aws eks update-kubeconfig")
+        secret_check = plan.index("newrelic_pipeline_guard.py verify-secret")
+        helm_inventory = plan.index("helm list --all-namespaces")
+        self.assertLess(authorize, kubeconfig)
+        self.assertLess(kubeconfig, secret_check)
+        self.assertLess(secret_check, helm_inventory)
 
 
 if __name__ == "__main__":

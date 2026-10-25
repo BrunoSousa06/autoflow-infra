@@ -1,6 +1,5 @@
 resource "newrelic_alert_policy" "autoflow" {
-  count = var.enable_newrelic_account_resources ? 1 : 0
-
+  count               = var.enable_newrelic_account_resources ? 1 : 0
   account_id          = var.newrelic_account_id
   name                = "AutoFlow ${var.newrelic_environment}"
   incident_preference = "PER_CONDITION"
@@ -13,14 +12,13 @@ resource "newrelic_alert_policy" "autoflow" {
         var.newrelic_api_key != null && var.newrelic_api_key != "",
         var.newrelic_environment != null && trimspace(var.newrelic_environment) != "",
       ])
-      error_message = "Recursos de conta New Relic exigem account ID, região, API key e identificadores configurados no environment."
+      error_message = "Recursos de conta New Relic exigem account ID, região, API key e identificador de ambiente configurados."
     }
   }
 }
 
 resource "newrelic_nrql_alert_condition" "order_processing_failure" {
-  count = var.enable_newrelic_account_resources ? 1 : 0
-
+  count                        = var.enable_newrelic_account_resources ? 1 : 0
   policy_id                    = newrelic_alert_policy.autoflow[0].id
   account_id                   = var.newrelic_account_id
   name                         = "AutoFlow: falha no processamento de OS"
@@ -31,11 +29,9 @@ resource "newrelic_nrql_alert_condition" "order_processing_failure" {
   aggregation_method           = "event_flow"
   aggregation_delay            = 120
   fill_option                  = "none"
-
   nrql {
     query = "SELECT count(*) FROM AutoFlowOrderProcessingFailure WHERE environment = '${var.newrelic_environment}'"
   }
-
   critical {
     operator              = "above"
     threshold             = 0
@@ -45,8 +41,7 @@ resource "newrelic_nrql_alert_condition" "order_processing_failure" {
 }
 
 resource "newrelic_nrql_alert_condition" "integration_failure" {
-  count = var.enable_newrelic_account_resources ? 1 : 0
-
+  count                        = var.enable_newrelic_account_resources ? 1 : 0
   policy_id                    = newrelic_alert_policy.autoflow[0].id
   account_id                   = var.newrelic_account_id
   name                         = "AutoFlow: falha de integração"
@@ -57,11 +52,9 @@ resource "newrelic_nrql_alert_condition" "integration_failure" {
   aggregation_method           = "event_flow"
   aggregation_delay            = 120
   fill_option                  = "none"
-
   nrql {
     query = "SELECT count(*) FROM AutoFlowIntegrationFailure WHERE environment = '${var.newrelic_environment}'"
   }
-
   critical {
     operator              = "above"
     threshold             = 0
@@ -71,8 +64,7 @@ resource "newrelic_nrql_alert_condition" "integration_failure" {
 }
 
 resource "newrelic_nrql_alert_condition" "api_error_rate" {
-  count = var.enable_newrelic_account_resources ? 1 : 0
-
+  count                        = var.enable_newrelic_account_resources ? 1 : 0
   policy_id                    = newrelic_alert_policy.autoflow[0].id
   account_id                   = var.newrelic_account_id
   name                         = "AutoFlow: taxa de erro API"
@@ -83,11 +75,7 @@ resource "newrelic_nrql_alert_condition" "api_error_rate" {
   aggregation_method           = "event_flow"
   aggregation_delay            = 120
   fill_option                  = "none"
-
   nrql {
-    # Buckets internos de cinco minutos incluem numerador e denominador.
-    # FACET na agregação mais interna é exigido para agregação aninhada em
-    # alertas NRQL; o WHERE externo suprime buckets com menos de 20 transações.
     query = <<-NRQL
       SELECT 100 * sum(errorCount) / sum(transactionCount)
       FROM (
@@ -101,7 +89,6 @@ resource "newrelic_nrql_alert_condition" "api_error_rate" {
       WHERE transactionCount >= 20
     NRQL
   }
-
   warning {
     operator              = "above"
     threshold             = 5
@@ -111,8 +98,7 @@ resource "newrelic_nrql_alert_condition" "api_error_rate" {
 }
 
 resource "newrelic_nrql_alert_condition" "api_latency_p95" {
-  count = var.enable_newrelic_account_resources ? 1 : 0
-
+  count                        = var.enable_newrelic_account_resources ? 1 : 0
   policy_id                    = newrelic_alert_policy.autoflow[0].id
   account_id                   = var.newrelic_account_id
   name                         = "AutoFlow: latência p95 API"
@@ -123,9 +109,7 @@ resource "newrelic_nrql_alert_condition" "api_latency_p95" {
   aggregation_method           = "event_flow"
   aggregation_delay            = 120
   fill_option                  = "none"
-
   nrql {
-    # Aplica o mesmo volume mínimo usado no alerta de taxa de erro.
     query = <<-NRQL
       SELECT max(p95Duration)
       FROM (
@@ -139,7 +123,6 @@ resource "newrelic_nrql_alert_condition" "api_latency_p95" {
       WHERE transactionCount >= 20
     NRQL
   }
-
   warning {
     operator              = "above"
     threshold             = 2
@@ -149,8 +132,7 @@ resource "newrelic_nrql_alert_condition" "api_latency_p95" {
 }
 
 resource "newrelic_nrql_alert_condition" "backend_unavailable" {
-  count = var.enable_newrelic_account_resources && trimspace(var.newrelic_backend_availability_alert_query) != "" ? 1 : 0
-
+  count                        = var.enable_newrelic_account_resources && trimspace(var.newrelic_backend_availability_alert_query) != "" ? 1 : 0
   policy_id                    = newrelic_alert_policy.autoflow[0].id
   account_id                   = var.newrelic_account_id
   name                         = "AutoFlow: backend indisponível"
@@ -161,14 +143,7 @@ resource "newrelic_nrql_alert_condition" "backend_unavailable" {
   aggregation_method           = "event_flow"
   aggregation_delay            = 120
   fill_option                  = "none"
-
-  nrql {
-    # Preencher somente após P08 confirmar o evento e os atributos Kubernetes
-    # reais no New Relic. A consulta deve retornar > 0 somente enquanto o
-    # workload aprovado estiver indisponível.
-    query = var.newrelic_backend_availability_alert_query
-  }
-
+  nrql { query = var.newrelic_backend_availability_alert_query }
   critical {
     operator              = "above"
     threshold             = 0
@@ -178,8 +153,7 @@ resource "newrelic_nrql_alert_condition" "backend_unavailable" {
 }
 
 resource "newrelic_nrql_alert_condition" "backend_cpu_utilization" {
-  count = var.enable_newrelic_account_resources && trimspace(var.newrelic_backend_cpu_utilization_alert_query) != "" ? 1 : 0
-
+  count                        = var.enable_newrelic_account_resources && trimspace(var.newrelic_backend_cpu_utilization_alert_query) != "" ? 1 : 0
   policy_id                    = newrelic_alert_policy.autoflow[0].id
   account_id                   = var.newrelic_account_id
   name                         = "AutoFlow: utilização de CPU"
@@ -190,12 +164,7 @@ resource "newrelic_nrql_alert_condition" "backend_cpu_utilization" {
   aggregation_method           = "event_flow"
   aggregation_delay            = 120
   fill_option                  = "none"
-
-  nrql {
-    # A consulta deve retornar percentual de utilização sobre limite real validado.
-    query = var.newrelic_backend_cpu_utilization_alert_query
-  }
-
+  nrql { query = var.newrelic_backend_cpu_utilization_alert_query }
   warning {
     operator              = "above"
     threshold             = 85
@@ -205,8 +174,7 @@ resource "newrelic_nrql_alert_condition" "backend_cpu_utilization" {
 }
 
 resource "newrelic_nrql_alert_condition" "backend_memory_utilization" {
-  count = var.enable_newrelic_account_resources && trimspace(var.newrelic_backend_memory_utilization_alert_query) != "" ? 1 : 0
-
+  count                        = var.enable_newrelic_account_resources && trimspace(var.newrelic_backend_memory_utilization_alert_query) != "" ? 1 : 0
   policy_id                    = newrelic_alert_policy.autoflow[0].id
   account_id                   = var.newrelic_account_id
   name                         = "AutoFlow: utilização de memória"
@@ -217,12 +185,7 @@ resource "newrelic_nrql_alert_condition" "backend_memory_utilization" {
   aggregation_method           = "event_flow"
   aggregation_delay            = 120
   fill_option                  = "none"
-
-  nrql {
-    # A consulta deve retornar percentual de utilização sobre limite real validado.
-    query = var.newrelic_backend_memory_utilization_alert_query
-  }
-
+  nrql { query = var.newrelic_backend_memory_utilization_alert_query }
   warning {
     operator              = "above"
     threshold             = 85
