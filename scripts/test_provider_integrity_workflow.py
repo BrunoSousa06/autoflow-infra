@@ -38,7 +38,8 @@ class ProviderIntegrityWorkflowTests(unittest.TestCase):
         self.assertNotIn("TF_PLUGIN_CACHE_DIR", self.workflow)
 
     def test_provider_lockfile_keeps_approved_versions_and_checksums(self):
-        lockfile = (ROOT / "infra/.terraform.lock.hcl").read_text(encoding="utf-8")
+        platform_lockfile = (ROOT / "infra/.terraform.lock.hcl").read_text(encoding="utf-8")
+        newrelic_lockfile = (ROOT / "infra/newrelic/.terraform.lock.hcl").read_text(encoding="utf-8")
 
         for provider, version in (
             ("hashicorp/aws", "5.100.0"),
@@ -46,10 +47,13 @@ class ProviderIntegrityWorkflowTests(unittest.TestCase):
             ("newrelic/newrelic", "3.100.5"),
         ):
             with self.subTest(provider=provider):
+                lockfile = platform_lockfile if provider == "hashicorp/aws" else newrelic_lockfile
                 block = lockfile.split(f'provider "registry.terraform.io/{provider}"', 1)[1].split("\n}", 1)[0]
                 self.assertIn(f'version     = "{version}"', block)
                 self.assertIn('"h1:', block)
                 self.assertIn('"zh:', block)
+        self.assertNotIn("registry.terraform.io/hashicorp/helm", platform_lockfile)
+        self.assertNotIn("registry.terraform.io/newrelic/newrelic", platform_lockfile)
 
     def test_plan_diagnoses_provider_installation_after_init_without_dumping_secrets(self):
         init_position = self.plan.index("- name: Inicializar Terraform")

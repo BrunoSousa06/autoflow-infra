@@ -10,7 +10,13 @@ Para configurar Actions e inputs Terraform, consulte o [catálogo de variables e
 
 Para investigar nós EC2 que não registram no Kubernetes, consulte o [runbook de diagnóstico e recuperação EKS](docs/eks-node-recovery.md). O procedimento é somente leitura até a seção explícita de recuperação manual; não há reboot automatizado.
 
-Para reconstruir VPC/EKS após reset do Learner Lab sem tentar Helm antes da criação do cluster, siga o [runbook de primeiro provisionamento EKS](docs/eks-primeiro-provisionamento.md).
+O root `infra/` e o workflow `Pipeline` gerenciam somente VPC/EKS. New Relic tem state e workflow independentes em [`infra/newrelic/`](infra/newrelic/README.md), sem duplicar recursos AWS de plataforma.
+
+Para reconstruir VPC/EKS após reset do Learner Lab, siga o [runbook de primeiro provisionamento EKS](docs/eks-primeiro-provisionamento.md); depois sincronize a License Key pelo pipeline da aplicação e execute `New Relic Pipeline` uma vez. Para ambiente com objetos New Relic preexistentes, siga o [runbook de migração de state](docs/newrelic-state-migration.md), sem executar migração em deploy normal.
+
+Para o procedimento completo de reconstrução de homologação, incluindo RDS, Lambda, aplicação, API Gateway, bootstrap e proposta de orquestração, consulte o [guia de reconstrução após reset do Learner Lab](docs/reconstrucao-learner-lab.md).
+
+A prova local de orquestração segura `autoflow-infra` → `autoflow-lambda`, seus pré-requisitos GitHub e limitações estão registrados no [plano da reconstrução](docs/specs/reconstrucao-learner-lab/plano-implementacao.md).
 
 Para diagnóstico dos nós EKS, consulte o [runbook](docs/eks-node-recovery.md). O provisionamento da EC2 runner está descrito em [Runner privado do GitHub Actions](docs/github-runner.md).
 
@@ -42,8 +48,8 @@ Implante ou confirme dependências nesta ordem, respeitando os states e owners e
 
 ## States e pipelines
 
-Os componentes usam states S3 separados: infraestrutura EKS, aplicação, RDS, Lambda e API Gateway. Confirme conta, região, bucket, key e state autoritativo antes de inicializar cada root. Não inicialize state vazio sobre recursos existentes e não edite arquivos de state manualmente.
+Os componentes usam states S3 separados: infraestrutura EKS, New Relic, aplicação, RDS, Lambda e API Gateway. `infra/newrelic/` usa key própria no bucket existente. Confirme conta, região, bucket, key e state autoritativo antes de inicializar cada root. Não inicialize state vazio sobre recursos existentes e não edite arquivos de state manualmente.
 
-CI executa em PRs para `develop`/`main` e em pushes para `develop`, `main` e `feature/**`. Em feature branches, os jobs executam validações e Terraform Plan especulativo sob o Environment `homolog`; o plan não é publicado como artifact, não pode ser consumido por Apply e as exclusões/substituições não são autorizadas. Também é possível iniciar `workflow_dispatch` selecionando a feature branch e mantendo `apply` desmarcado. O Apply de VPC/EKS continua restrito ao fluxo existente de `develop`/`main`, com aprovação no Environment correspondente, e o Apply de API Gateway continua restrito a `develop`. Os fluxos incluem verificação de conta/state e gates destrutivos; Required reviewers precisam estar configurados efetivamente no GitHub. O workflow de criação automática de PRs é restrito a pushes em `main`, para que um push de feature não abra PR antes de a branch estar pronta. Consulte a [RFC](docs/api-gateway/rfc-api-gateway.md) e o [runbook](docs/api-gateway/runbook.md). Nenhum workflow instala gateways adicionais.
+CI executa em PRs e valida pushes em feature branches; workflows de deploy não executam Plan/Apply nessas branches. VPC/EKS é planejado pelo `Pipeline`, New Relic pelo `New Relic Pipeline`; ambos vinculam o Plan criptografado ao commit e exigem dispatch + aprovação do Environment para Apply. O API Gateway mantém workflow próprio. Required reviewers precisam estar configurados efetivamente no GitHub. O workflow de criação automática de PRs é restrito a pushes em `main`. Consulte a [RFC](docs/api-gateway/rfc-api-gateway.md) e o [runbook](docs/api-gateway/runbook.md). Nenhum workflow instala gateways adicionais.
 
 Use `AWS_PROFILE`, `AWS_REGION`, `AWS_EXPECTED_ACCOUNT_ID` e `TF_VAR_*` localmente. O guard `scripts/verify_aws_account.py` deve passar antes de operações AWS. GitHub Actions Variables contêm conta, região, bucket, keys e parâmetros não sensíveis; credenciais e dados sensíveis permanecem em GitHub Secrets.

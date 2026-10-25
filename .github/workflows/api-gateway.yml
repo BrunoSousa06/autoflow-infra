@@ -59,7 +59,7 @@ jobs:
 
   plan:
     name: Terraform Plan homolog
-    if: (github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/heads/feature/')) && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: github.ref == 'refs/heads/develop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     needs: validate
     runs-on: ubuntu-latest
     environment: homolog
@@ -76,16 +76,6 @@ jobs:
       TF_VAR_nodegroup_name: ${{ vars.EKS_NODEGROUP_NAME }}
       TF_STATE_KEY: ${{ vars.AWS_TF_STATE_KEY_GATEWAY }}
     steps:
-      - name: Exigir Required reviewers no environment para feature Plan
-        if: startsWith(github.ref, 'refs/heads/feature/')
-        env:
-          APPROVAL_CONFIGURED: ${{ vars.TERRAFORM_APPLY_APPROVAL_CONFIGURED }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          test "$APPROVAL_CONFIGURED" = "true"
-          REVIEWERS=$(gh api "repos/$GITHUB_REPOSITORY/environments/homolog" --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length')
-          test "$REVIEWERS" -gt 0
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}

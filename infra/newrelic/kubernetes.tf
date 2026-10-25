@@ -11,10 +11,10 @@ resource "helm_release" "newrelic_kubernetes" {
   wait             = true
 
   values = [
-    file("${path.module}/newrelic-values.yaml"),
+    file("${path.module}/values.yaml"),
     yamlencode({
       global = {
-        cluster                = aws_eks_cluster.autoflow.name
+        cluster                = var.eks_cluster_name
         customSecretName       = var.newrelic_license_secret_name
         customSecretLicenseKey = var.newrelic_license_secret_key
       }
@@ -30,10 +30,8 @@ resource "helm_release" "newrelic_kubernetes" {
           }
         }
       }
-  })]
-
-  depends_on = [
-    aws_eks_cluster.autoflow,
-    aws_eks_node_group.node_group,
+    })
   ]
+
+  depends_on = [data.aws_eks_cluster.autoflow, data.aws_eks_cluster_auth.auth]
 }

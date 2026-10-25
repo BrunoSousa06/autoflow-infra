@@ -6,6 +6,7 @@ from unittest.mock import patch
 from newrelic_pipeline_guard import (
     ConfigurationError,
     check_plan,
+    check_legacy_root_plan,
     config_fingerprint,
     validate_inputs,
     verify_kubernetes_secret,
@@ -159,6 +160,16 @@ class NewRelicPipelineGuardTests(unittest.TestCase):
         )
         self.assertNotEqual(original, config_fingerprint(changed))
 
+    def test_fingerprint_changes_on_aws_region_cluster_or_state_key_divergence(self):
+        original = config_fingerprint(self.environment)
+        for name, value in (
+            ("AWS_REGION", "us-west-2"),
+            ("TF_VAR_eks_cluster_name", "different-cluster"),
+            ("AWS_TF_STATE_KEY_NEWRELIC", "production/newrelic.tfstate"),
+        ):
+            with self.subTest(name=name):
+                self.assertNotEqual(original, config_fingerprint({**self.environment, name: value}))
+
     def test_synthetic_url_and_locations_must_be_configured_together(self):
         self.environment["TF_VAR_enable_newrelic_account_resources"] = "true"
         self.environment.update(
@@ -176,6 +187,19 @@ class NewRelicPipelineGuardTests(unittest.TestCase):
         self.environment["TF_VAR_newrelic_api_gateway_dashboard_queries"] = "not-json"
         with self.assertRaisesRegex(ConfigurationError, "QUERIES_JSON deve ser uma lista JSON"):
             validate_inputs(self.environment)
+
+    def test_legacy_plan_cannot_destroy_newrelic_resources_even_after_split(self):
+        with self.assertRaisesRegex(ConfigurationError, "root legado"):
+            check_legacy_root_plan({"resource_changes": [{
+                "address": "newrelic_alert_policy.autoflow[0]",
+                "type": "newrelic_alert_policy",
+                "change": {"actions": ["delete"]},
+            }]})
+        check_legacy_root_plan({"resource_changes": [{
+            "address": "aws_eks_cluster.autoflow",
+            "type": "aws_eks_cluster",
+            "change": {"actions": ["delete"]},
+        }]})
 
 
 if __name__ == "__main__":
