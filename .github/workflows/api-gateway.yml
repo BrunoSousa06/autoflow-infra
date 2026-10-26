@@ -133,7 +133,7 @@ jobs:
           python scripts/state_resource_guard.py --bucket "$AWS_TERRAFORM_STATE_BUCKET" --key "$AWS_TF_STATE_KEY_GATEWAY" -- aws apigatewayv2 get-apis --query "Items[?Name=='autoflow-homolog'].ApiId | [0]" --output text
           python scripts/state_resource_guard.py --bucket "$AWS_TERRAFORM_STATE_BUCKET" --key "$AWS_TF_STATE_KEY_GATEWAY" -- aws elbv2 describe-load-balancers --names autoflow-homolog-private --query 'LoadBalancers[0].LoadBalancerArn' --output text
           cd infra/api-gateway
-          terraform init -input=false -backend-config="bucket=$TF_VAR_terraform_state_bucket" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+          terraform init -input=false -lockfile=readonly -backend-config="bucket=$TF_VAR_terraform_state_bucket" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
           cd ../..
           python scripts/prepare_gateway_imports.py --bucket "$TF_VAR_terraform_state_bucket" --key "$TF_STATE_KEY" --region "$AWS_REGION" --name autoflow-homolog --output infra/api-gateway/gateway-vpc-link-imports.auto.tf
       - name: Gerar e revisar plano
@@ -143,7 +143,7 @@ jobs:
         run: |
           terraform plan -input=false -out=gateway.tfplan
           ALLOW_DESTRUCTIVE="$ALLOW_DESTRUCTIVE" python ../../scripts/review_gateway_plan.py gateway.tfplan
-          if [[ "$GITHUB_REF" == refs/heads/develop ]]; then sha256sum gateway.tfplan > gateway.tfplan.sha256; else rm -f gateway.tfplan; fi
+          if [[ "$GITHUB_REF" == refs/heads/develop ]]; then sha256sum gateway.tfplan .terraform.lock.hcl > gateway.tfplan.sha256; else rm -f gateway.tfplan; fi
       - name: Publicar plano confidencial e imutável
         if: github.ref == 'refs/heads/develop'
         uses: actions/upload-artifact@v4
