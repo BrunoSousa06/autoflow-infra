@@ -217,6 +217,7 @@ class EndpointAccessTests(unittest.TestCase):
             "AccessDenied": "An error occurred (AccessDenied) when calling HeadObject",
             "connectivity": "Could not connect to the endpoint URL: https://s3.invalid",
             "missing_bucket": "An error occurred (NoSuchBucket) when calling HeadObject",
+            "unrelated_404": "Proxy returned HTTP 404 while connecting to S3",
             "unexpected": "An error occurred (ServiceUnavailable) when calling HeadObject",
         }
         with patch.dict(os.environ, {"EKS_LEASE_BUCKET": "state-bucket", "EKS_LEASE_KEY": "ci/lease.json"}):
@@ -229,9 +230,28 @@ class EndpointAccessTests(unittest.TestCase):
                         "AccessDenied": "access_denied",
                         "connectivity": "connectivity",
                         "missing_bucket": "unexpected",
+                        "unrelated_404": "unexpected",
                         "unexpected": "unexpected",
                     }[category])
                     self.assertNotIn(stderr, str(raised.exception))
+
+    def test_unexpected_lease_read_reports_safe_operation_metadata_only(self):
+        secret_marker = "credential-secret-marker"
+        stderr = f"An error occurred (ServiceUnavailable) when calling HeadObject: {secret_marker}"
+        with patch.dict(os.environ, {"EKS_LEASE_BUCKET": "state-bucket", "EKS_LEASE_KEY": "ci/lease.json"}), patch(
+            "eks_endpoint_access.subprocess.run",
+            return_value=SimpleNamespace(returncode=7, stderr=stderr, stdout=""),
+        ):
+            with self.assertRaises(LeaseReadError) as raised:
+                load_lease()
+
+        diagnostic = str(raised.exception)
+        self.assertIn('"operation":"aws s3 cp"', diagnostic)
+        self.assertIn('"bucket":"state-bucket"', diagnostic)
+        self.assertIn('"key":"ci/lease.json"', diagnostic)
+        self.assertIn('"exit_code":7', diagnostic)
+        self.assertIn('"category":"unexpected"', diagnostic)
+        self.assertNotIn(secret_marker, diagnostic)
 
     def test_untrusted_lease_never_reads_or_updates_cluster_cidrs(self):
         aws = FakeAws({"189.6.8.245/32", "198.51.100.7/32"})
