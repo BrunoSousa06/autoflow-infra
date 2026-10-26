@@ -17,9 +17,23 @@ PERMANENT_CIDR = "189.6.8.245/32"
 class LeaseReadError(RuntimeError):
     """Falha classificada ao ler o lease no S3, sem propagar saída bruta do AWS CLI."""
 
-    def __init__(self, category):
+    def __init__(self, category, *, operation=None, bucket=None, key=None, returncode=None):
         self.category = category
-        super().__init__(f"Falha ao ler lease do S3: {category}")
+        self.operation = operation
+        self.bucket = bucket
+        self.key = key
+        self.returncode = returncode
+        message = f"Falha ao ler lease do S3: {category}"
+        if operation is not None:
+            diagnostic = json.dumps({
+                "operation": operation,
+                "bucket": bucket,
+                "key": key,
+                "exit_code": returncode,
+                "category": category,
+            }, ensure_ascii=True, separators=(",", ":"))
+            message += f"; diagnóstico={diagnostic}"
+        super().__init__(message)
 
 
 class AwsCli:
@@ -116,7 +130,13 @@ def load_lease():
         category = classify_lease_read_error(result.stderr)
         if category == "not_found":
             return None
-        raise LeaseReadError(category)
+        raise LeaseReadError(
+            category,
+            operation="aws s3 cp",
+            bucket=bucket,
+            key=key,
+            returncode=result.returncode,
+        )
     try:
         return validate_lease(json.loads(result.stdout))
     except (json.JSONDecodeError, TypeError) as error:
@@ -136,7 +156,9 @@ def classify_lease_read_error(stderr):
         "temporary failure in name resolution", "name or service not known", "ssl validation failed",
     )):
         return "connectivity"
-    if "nosuchkey" in message or re.search(r"\b404\b", message):
+    if re.search(r"\(nosuchkey\)", message) or re.search(
+        r"\(404\) when calling the (?:headobject|getobject) operation\b", message
+    ):
         return "not_found"
     return "unexpected"
 
