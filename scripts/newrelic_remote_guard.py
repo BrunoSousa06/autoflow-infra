@@ -13,13 +13,30 @@ class RemoteInventoryError(ValueError):
     pass
 
 
-def _get(url: str, api_key: str) -> object:
+def _get(url: str, api_key: str, endpoint: str) -> object:
     request = Request(url, headers={"Api-Key": api_key, "Accept": "application/json"})
     try:
         with urlopen(request, timeout=20) as response:
             return json.loads(response.read())
-    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as error:
-        raise RemoteInventoryError("Inventário New Relic indisponível ou sem autorização; operação bloqueada.") from error
+    except HTTPError as error:
+        status = error.code
+        category = {
+            401: "autenticação",
+            403: "autorização",
+            429: "limite de requisições",
+        }.get(status, "erro HTTP")
+        raise RemoteInventoryError(
+            f"Endpoint lógico {endpoint}: {category} (HTTP {status}); operação bloqueada."
+        ) from error
+    except (URLError, TimeoutError) as error:
+        category = "timeout" if isinstance(error, TimeoutError) else "erro de transporte"
+        raise RemoteInventoryError(
+            f"Endpoint lógico {endpoint}: {category}; inventário inconclusivo, operação bloqueada."
+        ) from error
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise RemoteInventoryError(
+            f"Endpoint lógico {endpoint}: resposta JSON inválida; inventário inconclusivo, operação bloqueada."
+        ) from error
 
 
 def account_resources_exist(region: str, api_key: str, environment: str) -> bool:
@@ -28,10 +45,12 @@ def account_resources_exist(region: str, api_key: str, environment: str) -> bool
 
 def account_resource_categories(region: str, api_key: str, environment: str) -> set[str]:
     host = "api.newrelic.com" if region == "US" else "api.eu.newrelic.com"
-    dashboards = _get(f"https://{host}/v2/dashboards.json", api_key)
-    policies = _get(f"https://{host}/v2/alerts_policies.json", api_key)
+    dashboards = _get(f"https://{host}/v2/dashboards.json", api_key, "dashboards.list")
+    policies = _get(f"https://{host}/v2/alerts_policies.json", api_key, "alert_policies.list")
     synthetics_host = "synthetics.newrelic.com" if region == "US" else "synthetics.eu.newrelic.com"
-    monitors = _get(f"https://{synthetics_host}/synthetics/api/v3/monitors", api_key)
+    monitors = _get(
+        f"https://{synthetics_host}/synthetics/api/v3/monitors", api_key, "synthetics_monitors.list"
+    )
 
     def named(payload: object, collection: str, name: str) -> bool:
         values = payload.get(collection, []) if isinstance(payload, dict) else payload
@@ -61,7 +80,9 @@ def account_resource_categories(region: str, api_key: str, environment: str) -> 
             if not policy_id:
                 raise RemoteInventoryError("Inventário da policy New Relic incompleto; operação bloqueada.")
             conditions = _get(
-                f"https://{host}/v2/alerts_nrql_conditions.json?policy_id={policy_id}", api_key
+                f"https://{host}/v2/alerts_nrql_conditions.json?policy_id={policy_id}",
+                api_key,
+                "alert_conditions.list",
             )
             values = conditions.get("nrql_conditions", []) if isinstance(conditions, dict) else conditions
             if isinstance(values, list):
