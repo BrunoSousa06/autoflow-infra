@@ -125,11 +125,30 @@ def load_lease():
     bucket, key = lease_location()
     if not bucket or not key:
         raise RuntimeError("EKS_LEASE_BUCKET e EKS_LEASE_KEY são obrigatórios para reconciliação")
+    head = subprocess.run(
+        ["aws", "s3api", "head-object", "--bucket", bucket, "--key", key, "--output", "json"],
+        capture_output=True,
+        text=True,
+    )
+    if head.returncode:
+        category = classify_lease_read_error(head.stderr)
+        if category == "not_found":
+            return None
+        raise LeaseReadError(
+            category,
+            operation="aws s3api head-object",
+            bucket=bucket,
+            key=key,
+            returncode=head.returncode,
+        )
+
     result = subprocess.run(["aws", "s3", "cp", f"s3://{bucket}/{key}", "-"], capture_output=True, text=True)
     if result.returncode:
         category = classify_lease_read_error(result.stderr)
+        # A successful HeadObject already proved the object existed. Any later
+        # failure to read it (including a concurrent deletion) is fail-closed.
         if category == "not_found":
-            return None
+            category = "unexpected"
         raise LeaseReadError(
             category,
             operation="aws s3 cp",
