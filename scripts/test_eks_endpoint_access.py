@@ -193,6 +193,20 @@ class EndpointAccessTests(unittest.TestCase):
             self.assertFalse(cleanup_if_lease_exists(aws, "eks-autoflow", "us-east-1"))
         self.assertEqual(aws.calls, [])
 
+    def test_confirmed_missing_s3_lease_allows_cleanup_without_cidr_changes(self):
+        aws = FakeAws({"189.6.8.245/32", "198.51.100.7/32"})
+        missing = SimpleNamespace(
+            returncode=1,
+            stderr="An error occurred (404) when calling the HeadObject operation: Not Found",
+            stdout="",
+        )
+        with patch.dict(os.environ, {"EKS_LEASE_BUCKET": "state-bucket", "EKS_LEASE_KEY": "ci/lease.json"}), patch(
+            "eks_endpoint_access.subprocess.run", return_value=missing
+        ) as run, patch("eks_endpoint_access.load_lease", wraps=load_lease):
+            self.assertFalse(cleanup_if_lease_exists(aws, "eks-autoflow", "us-east-1"))
+        self.assertEqual(aws.calls, [])
+        self.assertEqual(run.call_count, 1)
+
     def test_reset_cluster_discards_only_the_stale_lease_without_endpoint_mutation(self):
         lease = {"temporary_cidr": "198.51.100.7/32", "original_cidrs": ["189.6.8.245/32"]}
         with patch("eks_endpoint_access.cluster_config", return_value=None), patch(
@@ -208,8 +222,40 @@ class EndpointAccessTests(unittest.TestCase):
         )
         with patch.dict(os.environ, {"EKS_LEASE_BUCKET": "state-bucket", "EKS_LEASE_KEY": "ci/lease.json"}):
             for stderr in errors:
-                with self.subTest(stderr=stderr), patch("eks_endpoint_access.subprocess.run", return_value=SimpleNamespace(returncode=1, stderr=stderr, stdout="")):
+                with self.subTest(stderr=stderr), patch("eks_endpoint_access.subprocess.run", return_value=SimpleNamespace(returncode=1, stderr=stderr, stdout="")) as run:
                     self.assertIsNone(load_lease())
+                    self.assertEqual(run.call_count, 1)
+                    self.assertEqual(run.call_args.args[0][1:3], ["s3api", "head-object"])
+
+    def test_s3_existing_lease_is_read_after_successful_head_object(self):
+        lease_json = '{"temporary_cidr":"198.51.100.7/32","original_cidrs":["189.6.8.245/32"]}'
+        with patch.dict(os.environ, {"EKS_LEASE_BUCKET": "state-bucket", "EKS_LEASE_KEY": "ci/lease.json"}), patch(
+            "eks_endpoint_access.subprocess.run",
+            side_effect=(
+                SimpleNamespace(returncode=0, stderr="", stdout='{"ContentLength":86}'),
+                SimpleNamespace(returncode=0, stderr="", stdout=lease_json),
+            ),
+        ) as run:
+            self.assertEqual(load_lease(), {
+                "temporary_cidr": "198.51.100.7/32",
+                "original_cidrs": ["189.6.8.245/32"],
+            })
+
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args_list[0].args[0][1:3], ["s3api", "head-object"])
+        self.assertEqual(run.call_args_list[1].args[0][1:3], ["s3", "cp"])
+
+    def test_s3_copy_failure_after_successful_head_object_fails_closed(self):
+        with patch.dict(os.environ, {"EKS_LEASE_BUCKET": "state-bucket", "EKS_LEASE_KEY": "ci/lease.json"}), patch(
+            "eks_endpoint_access.subprocess.run",
+            side_effect=(
+                SimpleNamespace(returncode=0, stderr="", stdout="{}"),
+                SimpleNamespace(returncode=1, stderr="An error occurred (404) when calling the HeadObject operation", stdout=""),
+            ),
+        ):
+            with self.assertRaises(LeaseReadError) as raised:
+                load_lease()
+        self.assertEqual(raised.exception.category, "unexpected")
 
     def test_s3_auth_permission_connectivity_and_unexpected_errors_are_distinguished(self):
         errors = {
@@ -222,7 +268,7 @@ class EndpointAccessTests(unittest.TestCase):
         }
         with patch.dict(os.environ, {"EKS_LEASE_BUCKET": "state-bucket", "EKS_LEASE_KEY": "ci/lease.json"}):
             for category, stderr in errors.items():
-                with self.subTest(category=category), patch("eks_endpoint_access.subprocess.run", return_value=SimpleNamespace(returncode=1, stderr=stderr, stdout="")):
+                with self.subTest(category=category), patch("eks_endpoint_access.subprocess.run", return_value=SimpleNamespace(returncode=1, stderr=stderr, stdout="")) as run:
                     with self.assertRaises(LeaseReadError) as raised:
                         load_lease()
                     self.assertEqual(raised.exception.category, {
@@ -234,6 +280,7 @@ class EndpointAccessTests(unittest.TestCase):
                         "unexpected": "unexpected",
                     }[category])
                     self.assertNotIn(stderr, str(raised.exception))
+                    self.assertEqual(run.call_count, 1)
 
     def test_unexpected_lease_read_reports_safe_operation_metadata_only(self):
         secret_marker = "credential-secret-marker"
@@ -246,7 +293,7 @@ class EndpointAccessTests(unittest.TestCase):
                 load_lease()
 
         diagnostic = str(raised.exception)
-        self.assertIn('"operation":"aws s3 cp"', diagnostic)
+        self.assertIn('"operation":"aws s3api head-object"', diagnostic)
         self.assertIn('"bucket":"state-bucket"', diagnostic)
         self.assertIn('"key":"ci/lease.json"', diagnostic)
         self.assertIn('"exit_code":7', diagnostic)
