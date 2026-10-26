@@ -47,6 +47,8 @@ jobs:
       AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
       TF_STATE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       TF_STATE_KEY: ${{ vars.AWS_TF_STATE_KEY_NEWRELIC }}
+      EKS_LEASE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
+      EKS_LEASE_KEY: ci/eks-endpoint-lease-newrelic-${{ github.run_id }}-${{ github.run_attempt }}-plan.json
       EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
       TF_VAR_aws_region: ${{ vars.AWS_REGION }}
       TF_VAR_aws_allowed_account_ids: '["${{ vars.AWS_EXPECTED_ACCOUNT_ID }}"]'
@@ -224,6 +226,8 @@ jobs:
       AWS_TF_STATE_KEY_INFRA: ${{ vars.AWS_TF_STATE_KEY_INFRA }}
       TF_STATE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       TF_STATE_KEY: ${{ vars.AWS_TF_STATE_KEY_NEWRELIC }}
+      EKS_LEASE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
+      EKS_LEASE_KEY: ci/eks-endpoint-lease-newrelic-${{ github.run_id }}-${{ github.run_attempt }}-apply.json
       EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
       TF_VAR_aws_region: ${{ vars.AWS_REGION }}
       TF_VAR_aws_allowed_account_ids: '["${{ vars.AWS_EXPECTED_ACCOUNT_ID }}"]'
