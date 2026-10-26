@@ -4,7 +4,7 @@ O workflow `Pipeline` e o root `infra/` gerenciam somente VPC, rede, EKS e node 
 
 ## Sequência após reset do Learner Lab
 
-1. Confirme/reabra o Learner Lab e execute o workflow `Pipeline` em `develop` via `workflow_dispatch` com `apply` habilitado. O Apply aprovado cria/reconcilia VPC, cluster e node group. Em `main`, use `workflow_dispatch`; a aprovação do Environment `production` continua obrigatória.
+1. Confirme/reabra o Learner Lab e execute o workflow `Pipeline` em `develop` via `workflow_dispatch` com `apply` habilitado. Antes do Plan, o preflight read-only verifica que as Cluster/Node Roles existem, são diferentes, confiam em `eks.amazonaws.com`/`ec2.amazonaws.com` e têm as AWS managed policies requeridas. Se o cluster já existir, a role efetiva deve corresponder à configurada; divergência bloqueia a execução e exige reconstrução controlada. O Apply aprovado cria/reconcilia VPC, cluster e node group. Em `main`, use `workflow_dispatch`; a aprovação do Environment `production` continua obrigatória.
 2. Aguarde o Apply terminar e o node group ficar operacional. Execute o pipeline existente do repositório `autoflow` na branch/environment correspondente. Ele prepara kubeconfig e sincroniza automaticamente a License Key existente do GitHub Secret para AWS Secrets Manager e para o Secret Kubernetes; em caso de falha, esse pipeline para sem aplicar a aplicação.
 3. Execute uma vez `New Relic Pipeline` por `workflow_dispatch` em `develop`, com `apply=true`, após revisão do Plan. O workflow opera somente no root `infra/newrelic/`, valida conta/região, EKS/node groups e Secret `newrelic-license`/`licenseKey` antes de instalar `nri-bundle` quando habilitado. Não é necessário reaplicar VPC/EKS.
 

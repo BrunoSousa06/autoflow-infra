@@ -33,13 +33,13 @@ variable "role_arn" {
 }
 
 variable "cluster_role_arn" {
-  description = "Optional EKS control-plane role override. Defaults to role_arn for backward compatibility."
+  description = "ARN da role de control plane EKS. Usa role_arn como fallback legado."
   type        = string
   default     = null
 }
 
 variable "node_role_arn" {
-  description = "Optional managed node group role override. Defaults to role_arn for backward compatibility."
+  description = "ARN da role do managed node group. Usa role_arn como fallback legado."
   type        = string
   default     = null
 }

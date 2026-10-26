@@ -37,6 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python -m unittest discover -s scripts -p "test_verify_aws_account.py" -v
+      - run: python -m unittest discover -s scripts -p "test_verify_eks_iam_roles.py" -v
       - run: python -m unittest discover -s scripts -p "test_eks_endpoint_access.py" -v
       - run: python -m unittest discover -s scripts -p "test_prepare_eks_access_imports.py" -v
       - run: python -m unittest discover -s scripts -p "test_state_resource_guard.py" -v
@@ -65,6 +66,8 @@ jobs:
       TF_VAR_cluster_role_arn: ${{ vars.AWS_EKS_CLUSTER_ROLE_ARN }}
       TF_VAR_node_role_arn: ${{ vars.AWS_EKS_NODE_ROLE_ARN }}
       TF_VAR_operator_access_role_arn: ${{ vars.AWS_EKS_OPERATOR_ACCESS_ROLE_ARN }}
+      AWS_EKS_CLUSTER_ROLE_ARN: ${{ vars.AWS_EKS_CLUSTER_ROLE_ARN }}
+      AWS_EKS_NODE_ROLE_ARN: ${{ vars.AWS_EKS_NODE_ROLE_ARN }}
       EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
       EKS_LEASE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       EKS_LEASE_KEY: ci/eks-endpoint-lease.json
@@ -92,6 +95,8 @@ jobs:
           python scripts/verify_aws_account.py
           echo "ip=$(curl -4fsS https://checkip.amazonaws.com | tr -d '\n')" >> "$GITHUB_OUTPUT"
           test -n "$PLAN_ENCRYPTION_PASSPHRASE"
+      - name: Validar IAM Roles, trust policies e policies do EKS
+        run: python scripts/verify_eks_iam_roles.py --cluster "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --expected-account "$AWS_EXPECTED_ACCOUNT_ID" --cluster-role-arn "$AWS_EKS_CLUSTER_ROLE_ARN" --node-role-arn "$AWS_EKS_NODE_ROLE_ARN"
       - name: Detectar EKS antes do Plan
         id: eks_preflight
         run: python scripts/eks_cluster_preflight.py --cluster "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
@@ -197,6 +202,8 @@ jobs:
       TF_VAR_cluster_role_arn: ${{ vars.AWS_EKS_CLUSTER_ROLE_ARN }}
       TF_VAR_node_role_arn: ${{ vars.AWS_EKS_NODE_ROLE_ARN }}
       TF_VAR_operator_access_role_arn: ${{ vars.AWS_EKS_OPERATOR_ACCESS_ROLE_ARN }}
+      AWS_EKS_CLUSTER_ROLE_ARN: ${{ vars.AWS_EKS_CLUSTER_ROLE_ARN }}
+      AWS_EKS_NODE_ROLE_ARN: ${{ vars.AWS_EKS_NODE_ROLE_ARN }}
       EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
       EKS_LEASE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       EKS_LEASE_KEY: ci/eks-endpoint-lease.json
@@ -226,6 +233,8 @@ jobs:
         env:
           AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
         run: python scripts/verify_aws_account.py
+      - name: Validar IAM Roles, trust policies e role efetiva do EKS
+        run: python scripts/verify_eks_iam_roles.py --cluster "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --expected-account "$AWS_EXPECTED_ACCOUNT_ID" --cluster-role-arn "$AWS_EKS_CLUSTER_ROLE_ARN" --node-role-arn "$AWS_EKS_NODE_ROLE_ARN"
       - name: Autorizar IP deste runner para Apply
         id: runner
         run: |
