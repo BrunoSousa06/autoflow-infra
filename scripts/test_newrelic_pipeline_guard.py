@@ -201,6 +201,27 @@ class NewRelicPipelineGuardTests(unittest.TestCase):
             "change": {"actions": ["delete"]},
         }]})
 
+    def test_endpoint_lease_is_unique_per_run_and_job_and_cleanup_is_unconditional(self):
+        from pathlib import Path
+
+        workflow = Path(__file__).parents[1] / ".github/workflows/newrelic.yml"
+        content = workflow.read_text(encoding="utf-8")
+        plan = content.split("\n  plan:", 1)[1].split("\n  apply:", 1)[0]
+        apply = content.split("\n  apply:", 1)[1]
+
+        expected_bucket = "EKS_LEASE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}"
+        for job, section in (("plan", plan), ("apply", apply)):
+            with self.subTest(job=job):
+                self.assertIn(expected_bucket, section)
+                self.assertIn(
+                    f"EKS_LEASE_KEY: ci/eks-endpoint-lease-newrelic-${{{{ github.run_id }}}}-${{{{ github.run_attempt }}}}-{job}.json",
+                    section,
+                )
+                self.assertIn("python scripts/eks_endpoint_access.py authorize", section)
+                cleanup = section.split("- name: Remover autorização temporária do endpoint EKS", 1)[1]
+                self.assertIn("if: always()", cleanup)
+                self.assertIn("python scripts/eks_endpoint_access.py cleanup", cleanup)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -17,6 +17,7 @@ class FakeAws:
         self.cidrs = set(cidrs)
         self.calls = []
         self.fail_update = False
+        self.fail_after_update = False
 
     def __call__(self, *args):
         self.calls.append(args)
@@ -27,6 +28,8 @@ class FakeAws:
                 raise RuntimeError("falha simulada")
             values = next(x for x in args if x.startswith("publicAccessCidrs="))
             self.cidrs = set(values.split("=", 1)[1].split(","))
+            if self.fail_after_update:
+                raise RuntimeError("falha após atualização simulada")
             return {"update": {"id": "update-1"}}
         if args[1] == "describe-update":
             return {"update": {"status": "Successful"}}
@@ -73,6 +76,19 @@ class EndpointAccessTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "simulada"):
             authorize(aws, "eks-autoflow", "us-east-1", "198.51.100.7", ["189.6.8.245/32"])
         self.assertEqual(aws.cidrs, {"189.6.8.245/32"})
+
+    @patch("eks_endpoint_access.time.sleep")
+    def test_cleanup_recovers_original_cidrs_after_authorize_update_failure(self, _sleep):
+        aws = FakeAws({"189.6.8.245/32", "203.0.113.4/32"})
+        aws.fail_after_update = True
+        with self.assertRaisesRegex(RuntimeError, "após atualização simulada"):
+            authorize(aws, "eks-autoflow", "us-east-1", "198.51.100.7", ["189.6.8.245/32"])
+
+        self.assertIsNotNone(self.lease)
+        aws.fail_after_update = False
+        self.assertTrue(cleanup_if_lease_exists(aws, "eks-autoflow", "us-east-1"))
+        self.assertEqual(aws.cidrs, {"189.6.8.245/32", "203.0.113.4/32"})
+        self.assertIsNone(self.lease)
 
     @patch("eks_endpoint_access.time.sleep")
     def test_cleanup_removes_only_runner_ip_and_restores_original_cidrs(self, _sleep):
