@@ -29,6 +29,15 @@ class GatewayRoutesTest(unittest.TestCase):
         self.assertIn('backend-config="key=$TF_STATE_KEY"', init_step)
         self.assertLess(apply.index("terraform init -input=false -lockfile=readonly"), apply.index("terraform apply -input=false gateway.tfplan"))
 
+    def test_plan_and_apply_verify_the_same_readonly_lockfile(self):
+        workflow = (ROOT / ".github/workflows/api-gateway.yml").read_text(encoding="utf-8")
+        plan = workflow.split("  plan:", 1)[1].split("  apply:", 1)[0]
+        apply = workflow.split("  apply:", 1)[1]
+
+        self.assertIn("terraform init -input=false -lockfile=readonly", plan)
+        self.assertIn("sha256sum gateway.tfplan .terraform.lock.hcl > gateway.tfplan.sha256", plan)
+        self.assertIn("sha256sum --check gateway.tfplan.sha256", apply)
+
     def test_allowlist_corresponde_aos_controllers(self):
         controllers = list((APP / "backend/src/main/java/com/autoflow/presentation").rglob("*Controller.java"))
         self.assertTrue(controllers, "Disponibilize autoflow em AUTOFLOW_REPO")
