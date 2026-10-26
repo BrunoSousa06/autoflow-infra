@@ -45,6 +45,7 @@ jobs:
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
       AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
+      AWS_TF_STATE_KEY_INFRA: ${{ vars.AWS_TF_STATE_KEY_INFRA }}
       TF_STATE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       TF_STATE_KEY: ${{ vars.AWS_TF_STATE_KEY_NEWRELIC }}
       EKS_LEASE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
@@ -112,9 +113,6 @@ jobs:
         with:
           version: v3.16.4
       - name: Inicializar e inspecionar states sem exibir conteúdo
-        env:
-          AWS_TERRAFORM_STATE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
-          AWS_TF_STATE_KEY_INFRA: ${{ vars.AWS_TF_STATE_KEY_INFRA }}
         run: |
           set -euo pipefail
           umask 077
@@ -148,6 +146,7 @@ jobs:
         id: runner
         run: echo "ip=$(curl -4fsS https://checkip.amazonaws.com | tr -d '\n')" >> "$GITHUB_OUTPUT"
       - name: Autorizar temporariamente o runner no endpoint EKS
+        id: authorize_eks
         env:
           RUNNER_IP: ${{ steps.runner.outputs.ip }}
         run: python scripts/eks_endpoint_access.py authorize --ip "$RUNNER_IP" --region "$AWS_REGION" --cluster "$EKS_CLUSTER_NAME"
@@ -210,7 +209,7 @@ jobs:
           retention-days: 1
           compression-level: 0
       - name: Remover autorização temporária do endpoint EKS
-        if: always()
+        if: always() && steps.authorize_eks.outcome != 'skipped'
         run: |
           python scripts/eks_endpoint_access.py cleanup --region "$AWS_REGION" --cluster "$EKS_CLUSTER_NAME"
           rm -f "$RUNNER_TEMP/legacy-state.json" "$RUNNER_TEMP/newrelic-state.json" "$RUNNER_TEMP/newrelic-account-presence" "$RUNNER_TEMP/helm-presence" "$RUNNER_TEMP/newrelic-head-error" "$RUNNER_TEMP/helm-list.json"
@@ -270,6 +269,7 @@ jobs:
         id: runner
         run: echo "ip=$(curl -4fsS https://checkip.amazonaws.com | tr -d '\n')" >> "$GITHUB_OUTPUT"
       - name: Autorizar temporariamente o runner no endpoint EKS
+        id: authorize_eks
         env:
           RUNNER_IP: ${{ steps.runner.outputs.ip }}
         run: python scripts/eks_endpoint_access.py authorize --ip "$RUNNER_IP" --region "$AWS_REGION" --cluster "$EKS_CLUSTER_NAME"
@@ -339,7 +339,7 @@ jobs:
           set -euo pipefail
           terraform apply -input=false newrelic.tfplan
       - name: Remover autorização temporária do endpoint EKS
-        if: always()
+        if: always() && steps.authorize_eks.outcome != 'skipped'
         run: |
           python scripts/eks_endpoint_access.py cleanup --region "$AWS_REGION" --cluster "$EKS_CLUSTER_NAME"
           rm -f "$RUNNER_TEMP/legacy-state.json" "$RUNNER_TEMP/newrelic-state.json" "$RUNNER_TEMP/newrelic-account-presence" "$RUNNER_TEMP/helm-presence" "$RUNNER_TEMP/newrelic-head-error" "$RUNNER_TEMP/helm-list.json"

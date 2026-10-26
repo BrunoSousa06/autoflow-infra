@@ -201,7 +201,7 @@ class NewRelicPipelineGuardTests(unittest.TestCase):
             "change": {"actions": ["delete"]},
         }]})
 
-    def test_endpoint_lease_is_unique_per_run_and_job_and_cleanup_is_unconditional(self):
+    def test_endpoint_cleanup_runs_only_after_authorization_was_attempted(self):
         from pathlib import Path
 
         workflow = Path(__file__).parents[1] / ".github/workflows/newrelic.yml"
@@ -212,15 +212,35 @@ class NewRelicPipelineGuardTests(unittest.TestCase):
         expected_bucket = "EKS_LEASE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}"
         for job, section in (("plan", plan), ("apply", apply)):
             with self.subTest(job=job):
+                job_env = section.split("    steps:", 1)[0]
                 self.assertIn(expected_bucket, section)
+                self.assertIn("AWS_TF_STATE_KEY_INFRA: ${{ vars.AWS_TF_STATE_KEY_INFRA }}", job_env)
                 self.assertIn(
                     f"EKS_LEASE_KEY: ci/eks-endpoint-lease-newrelic-${{{{ github.run_id }}}}-${{{{ github.run_attempt }}}}-{job}.json",
                     section,
                 )
-                self.assertIn("python scripts/eks_endpoint_access.py authorize", section)
+                credentials_position = section.index("aws-actions/configure-aws-credentials@v4")
+                authorization_position = section.index("python scripts/eks_endpoint_access.py authorize")
+                self.assertLess(credentials_position, authorization_position)
+                authorization = section.split("- name: Autorizar temporariamente o runner no endpoint EKS", 1)[1]
+                self.assertIn("id: authorize_eks", authorization.split("- name:", 1)[0])
                 cleanup = section.split("- name: Remover autorização temporária do endpoint EKS", 1)[1]
-                self.assertIn("if: always()", cleanup)
+                self.assertIn("if: always() && steps.authorize_eks.outcome != 'skipped'", cleanup)
                 self.assertIn("python scripts/eks_endpoint_access.py cleanup", cleanup)
+
+    def test_plan_infra_state_key_is_available_to_pre_credential_validation(self):
+        from pathlib import Path
+
+        workflow = Path(__file__).parents[1] / ".github/workflows/newrelic.yml"
+        content = workflow.read_text(encoding="utf-8")
+        plan = content.split("\n  plan:", 1)[1].split("\n  apply:", 1)[0]
+        job_env = plan.split("    steps:", 1)[0]
+        validation = plan.split("- name: Validar configuração antes de acessar AWS", 1)[1].split("- uses:", 1)[0]
+        credentials_position = plan.index("aws-actions/configure-aws-credentials@v4")
+
+        self.assertIn("AWS_TF_STATE_KEY_INFRA: ${{ vars.AWS_TF_STATE_KEY_INFRA }}", job_env)
+        self.assertIn('test -n "$AWS_TF_STATE_KEY_INFRA"', validation)
+        self.assertLess(plan.index("Validar configuração antes de acessar AWS"), credentials_position)
 
 
 if __name__ == "__main__":
