@@ -20,7 +20,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: autoflow-newrelic-${{ github.ref }}
+  group: autoflow-eks-endpoint-deploy
   cancel-in-progress: false
 
 jobs:
@@ -145,6 +145,10 @@ jobs:
       - name: Capturar IP do runner
         id: runner
         run: echo "ip=$(curl -4fsS https://checkip.amazonaws.com | tr -d '\n')" >> "$GITHUB_OUTPUT"
+      - name: Reconciliar leases órfãos do endpoint EKS
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/eks_endpoint_access.py reconcile-orphans --region "$AWS_REGION" --cluster "$EKS_CLUSTER_NAME"
       - name: Autorizar temporariamente o runner no endpoint EKS
         id: authorize_eks
         env:
@@ -268,6 +272,10 @@ jobs:
       - name: Capturar IP do runner
         id: runner
         run: echo "ip=$(curl -4fsS https://checkip.amazonaws.com | tr -d '\n')" >> "$GITHUB_OUTPUT"
+      - name: Reconciliar leases órfãos do endpoint EKS
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/eks_endpoint_access.py reconcile-orphans --region "$AWS_REGION" --cluster "$EKS_CLUSTER_NAME"
       - name: Autorizar temporariamente o runner no endpoint EKS
         id: authorize_eks
         env:

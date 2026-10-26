@@ -5,13 +5,33 @@ import ipaddress
 import json
 import os
 import re
-import tempfile
 import subprocess
 import sys
+import tempfile
 import time
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 
 PERMANENT_CIDR = "189.6.8.245/32"
+UPDATE_RETRIES = 3
+UPDATE_WAIT_ATTEMPTS = 60
+UPDATE_WAIT_SECONDS = 10
+NEWRELIC_LEASE_PREFIX = "ci/eks-endpoint-lease-newrelic-"
+NEWRELIC_LEASE_KEY = re.compile(
+    r"^ci/eks-endpoint-lease-newrelic-(?P<run_id>[0-9]+)-(?P<attempt>[1-9][0-9]*)-(?P<job>plan|apply)\.json$"
+)
+
+
+class AwsOperationError(RuntimeError):
+    def __init__(self, operation, error):
+        stderr = error.stderr or ""
+        match = re.search(r"An error occurred \(([^)]+)\) when calling ([^:]+)", stderr)
+        self.code = match.group(1) if match else "UnknownAWSException"
+        self.operation = operation
+        super().__init__(
+            f"Falha AWS em {operation}: {self.code}; exit code {error.returncode}."
+        )
 
 
 class LeaseReadError(RuntimeError):
@@ -38,34 +58,80 @@ class LeaseReadError(RuntimeError):
 
 class AwsCli:
     def __call__(self, *args):
-        result = subprocess.run(["aws", *args, "--output", "json"], check=True, capture_output=True, text=True)
+        try:
+            result = subprocess.run(
+                ["aws", *args, "--output", "json"], check=True, capture_output=True, text=True
+            )
+        except subprocess.CalledProcessError as error:
+            raise AwsOperationError(" ".join(args[:2]), error) from error
         return json.loads(result.stdout or "{}")
 
 
 def cluster_config(aws, cluster, region):
     try:
         return aws("eks", "describe-cluster", "--name", cluster, "--region", region)["cluster"]["resourcesVpcConfig"]
-    except subprocess.CalledProcessError as error:
+    except (AwsOperationError, subprocess.CalledProcessError) as error:
         # A first-time provision has no cluster yet. Only the explicit EKS
         # not-found response is benign; expired credentials and AccessDenied
         # must remain fatal.
-        message = (error.stderr or "").lower()
+        message = (error.stderr or "").lower() if isinstance(error, subprocess.CalledProcessError) else ""
+        if isinstance(error, AwsOperationError) and error.code == "ResourceNotFoundException":
+            return None
         if "resourcenotfoundexception" in message or "resource not found" in message:
             return None
         raise
 
 
-def update_and_wait(aws, cluster, region, cidrs):
-    result = aws("eks", "update-cluster-config", "--name", cluster, "--region", region,
-                 "--resources-vpc-config", "publicAccessCidrs=" + ",".join(sorted(set(cidrs))))
-    update_id = result["update"]["id"]
-    while True:
-        update = aws("eks", "describe-update", "--name", cluster, "--region", region, "--update-id", update_id)["update"]
+def _wait_for_update(aws, cluster, region, update_id):
+    for _ in range(UPDATE_WAIT_ATTEMPTS):
+        update = aws(
+            "eks", "describe-update", "--name", cluster, "--region", region, "--update-id", update_id
+        )["update"]
         if update["status"] == "Successful":
             return
         if update["status"] in {"Failed", "Cancelled"}:
             raise RuntimeError(f"Atualização de endpoint EKS terminou como {update['status']}")
-        time.sleep(10)
+        time.sleep(UPDATE_WAIT_SECONDS)
+    raise RuntimeError("Tempo limite aguardando atualização de endpoint EKS; lease mantido.")
+
+
+def _wait_for_active_updates(aws, cluster, region):
+    for _ in range(UPDATE_WAIT_ATTEMPTS):
+        updates = aws("eks", "list-updates", "--name", cluster, "--region", region).get("updateIds", [])
+        active = []
+        for update_id in updates:
+            update = aws(
+                "eks", "describe-update", "--name", cluster, "--region", region, "--update-id", update_id
+            )["update"]
+            if update["status"] == "InProgress":
+                active.append(update_id)
+        if not active:
+            return
+        for update_id in active:
+            _wait_for_update(aws, cluster, region, update_id)
+    raise RuntimeError("Tempo limite aguardando atualizações EKS existentes; lease mantido.")
+
+
+def update_and_wait(aws, cluster, region, cidrs):
+    cidrs = set(cidrs)
+    if "0.0.0.0/0" in cidrs:
+        raise RuntimeError("CIDR público irrestrito não permitido")
+    value = "publicAccessCidrs=" + ",".join(sorted(cidrs))
+    for attempt in range(UPDATE_RETRIES):
+        _wait_for_active_updates(aws, cluster, region)
+        try:
+            result = aws(
+                "eks", "update-cluster-config", "--name", cluster, "--region", region,
+                "--resources-vpc-config", value,
+            )
+        except AwsOperationError as error:
+            if error.code != "ResourceInUseException" or attempt == UPDATE_RETRIES - 1:
+                raise
+            time.sleep(UPDATE_WAIT_SECONDS)
+            continue
+        _wait_for_update(aws, cluster, region, result["update"]["id"])
+        return
+    raise RuntimeError("Conflito transitório de atualização EKS; lease mantido.")
 
 
 def authorize(aws, cluster, region, runner_ip, baseline):
@@ -89,17 +155,32 @@ def authorize(aws, cluster, region, runner_ip, baseline):
 
 
 def cleanup(aws, cluster, region, lease):
+    return _cleanup(aws, cluster, region, lease)
+
+
+def _cleanup(aws, cluster, region, lease, lease_key=None):
     lease = validate_lease(lease)
     config = cluster_config(aws, cluster, region)
     if config is None:
         # O cluster foi recriado/resetado; a allowlist e o lease antigo não se aplicam.
-        remove_lease()
+        if lease_key is None:
+            remove_lease()
+        else:
+            remove_lease(lease_key)
         return
     current = set(config["publicAccessCidrs"])
     target = (current - {lease["temporary_cidr"]}) | set(lease["original_cidrs"])
+    if "0.0.0.0/0" in target:
+        raise RuntimeError("CIDR público irrestrito não permitido; lease mantido.")
     if target != current:
         update_and_wait(aws, cluster, region, target)
-    remove_lease()
+        confirmed = cluster_config(aws, cluster, region)
+        if confirmed is None or set(confirmed["publicAccessCidrs"]) != target:
+            raise RuntimeError("CIDRs restaurados não confirmados no endpoint EKS; lease mantido.")
+    if lease_key is None:
+        remove_lease()
+    else:
+        remove_lease(lease_key)
 
 
 def lease_location():
@@ -121,8 +202,9 @@ def save_lease(lease):
         os.unlink(path)
 
 
-def load_lease():
-    bucket, key = lease_location()
+def load_lease(key=None):
+    bucket, configured_key = lease_location()
+    key = key or configured_key
     if not bucket or not key:
         raise RuntimeError("EKS_LEASE_BUCKET e EKS_LEASE_KEY são obrigatórios para reconciliação")
     head = subprocess.run(
@@ -205,8 +287,9 @@ def validate_lease(lease):
     return {"temporary_cidr": str(temporary_network), "original_cidrs": normalized_originals}
 
 
-def remove_lease():
-    bucket, key = lease_location()
+def remove_lease(key=None):
+    bucket, configured_key = lease_location()
+    key = key or configured_key
     subprocess.run(["aws", "s3", "rm", f"s3://{bucket}/{key}"], check=True, capture_output=True, text=True)
 
 
@@ -222,9 +305,70 @@ def cleanup_if_lease_exists(aws, cluster, region):
     return True
 
 
+def newrelic_workflow_runs(token, repository):
+    if not token or not re.fullmatch(r"[^/]+/[^/]+", repository or ""):
+        raise RuntimeError("Identidade GitHub para reconciliar leases incompleta; operação bloqueada.")
+    runs = []
+    page = 1
+    while True:
+        url = (
+            f"https://api.github.com/repos/{repository}/actions/workflows/newrelic.yml/runs"
+            f"?per_page=100&page={page}"
+        )
+        request = Request(
+            url,
+            headers={"Accept": "application/vnd.github+json", "Authorization": f"Bearer {token}"},
+        )
+        try:
+            with urlopen(request, timeout=20) as response:
+                payload = json.loads(response.read())
+        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError) as error:
+            raise RuntimeError(
+                "Não foi possível consultar com segurança o histórico do workflow New Relic; leases mantidos."
+            ) from error
+        page_runs = payload.get("workflow_runs") if isinstance(payload, dict) else None
+        if not isinstance(page_runs, list):
+            raise RuntimeError("Resposta inválida do histórico New Relic; leases mantidos.")
+        runs.extend(page_runs)
+        if len(page_runs) < 100:
+            return runs
+        page += 1
+
+
+def reconcile_orphan_leases(aws, cluster, region, token, repository, current_run_id, current_attempt):
+    if not isinstance(current_attempt, int) or isinstance(current_attempt, bool) or current_attempt <= 0:
+        raise RuntimeError("Attempt atual do GitHub inválido; leases mantidos.")
+    runs = newrelic_workflow_runs(token, repository)
+    reconciled = 0
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        run_id = run.get("id")
+        attempts = run.get("run_attempt")
+        if (not isinstance(run_id, int) or isinstance(run_id, bool) or run_id <= 0
+                or not isinstance(attempts, int) or isinstance(attempts, bool) or attempts <= 0):
+            raise RuntimeError("Ownership de run New Relic inválido; leases mantidos.")
+        # O attempt corrente permanece protegido; attempts anteriores do mesmo run
+        # terminaram antes que o GitHub pudesse iniciar o attempt atual.
+        completed_attempts = attempts if run.get("status") == "completed" else attempts - 1
+        if str(run_id) == str(current_run_id):
+            completed_attempts = min(completed_attempts, max(0, current_attempt - 1))
+        for attempt in range(1, completed_attempts + 1):
+            for job in ("plan", "apply"):
+                key = f"{NEWRELIC_LEASE_PREFIX}{run_id}-{attempt}-{job}.json"
+                if not NEWRELIC_LEASE_KEY.fullmatch(key):
+                    raise RuntimeError("Chave de lease fora do padrão esperado; operação bloqueada.")
+                lease = load_lease(key)
+                if lease is None:
+                    continue
+                _cleanup(aws, cluster, region, lease, lease_key=key)
+                reconciled += 1
+    return reconciled
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("authorize", "cleanup", "reconcile"))
+    parser.add_argument("action", choices=("authorize", "cleanup", "reconcile", "reconcile-orphans"))
     parser.add_argument("--cluster", default="eks-autoflow")
     parser.add_argument("--region", default="us-east-1")
     parser.add_argument("--ip")
@@ -240,7 +384,18 @@ def main():
         with open(args.lease, "w", encoding="utf-8") as stream:
             json.dump(lease, stream)
     else:
-        if args.action == "reconcile":
+        if args.action == "reconcile-orphans":
+            reconciled = reconcile_orphan_leases(
+                aws,
+                args.cluster,
+                args.region,
+                os.environ.get("GH_TOKEN", ""),
+                os.environ.get("GITHUB_REPOSITORY", ""),
+                os.environ.get("GITHUB_RUN_ID", ""),
+                int(os.environ.get("GITHUB_RUN_ATTEMPT", "0")),
+            )
+            print(f"Leases órfãos reconciliados: {reconciled}")
+        elif args.action == "reconcile":
             reconcile(aws, args.cluster, args.region)
         else:
             if os.path.exists(args.lease):
