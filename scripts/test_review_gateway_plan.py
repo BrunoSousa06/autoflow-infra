@@ -52,6 +52,22 @@ def import_change(actions=("no-op",), importing="cjhmlk"):
     )
 
 
+def security_group_import_change(actions=("no-op",), importing="sg-0123456789abcdef0", **overrides):
+    after = {
+        "name": "autoflow-homolog-link-21105a8963a9a1a77ea4d9dd4a",
+        "description": "Saida do VPC Link exclusivamente para o ALB interno",
+        "vpc_id": "vpc-0123456789abcdef0",
+        "ingress": [],
+        "egress": [],
+        "tags_all": {"Project": "autoflow", "Environment": "homolog", "ManagedBy": "Terraform"},
+    }
+    after.update(overrides)
+    return change(
+        "module.private_eks.aws_security_group.link",
+        "aws_security_group", after, actions, importing,
+    )
+
+
 def real_import_replace_plan():
     """Formato equivalente ao resource_changes emitido por terraform show -json."""
     plan = initial_plan()
@@ -86,6 +102,22 @@ class ReviewGatewayPlanTest(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()) as output:
             review(plan, "123456789012")
         self.assertIn("imports declarativos=1", output.getvalue())
+
+    def test_accepts_import_do_security_group_anexado_ao_vpc_link_sem_drift(self):
+        plan = initial_plan()
+        plan["resource_changes"].append(security_group_import_change())
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            review(plan, "123456789012")
+        self.assertIn("1 imports declarativos", output.getvalue())
+
+    def test_rejects_import_do_security_group_se_exigir_update_ou_drift(self):
+        for item in (
+            security_group_import_change(actions=("update",)),
+            security_group_import_change(egress=[{"cidr_ipv4": "0.0.0.0/0"}]),
+            security_group_import_change(tags_all={"Project": "other"}),
+        ):
+            with self.subTest(item=item), self.assertRaises(RuntimeError):
+                review({"resource_changes": [item]}, "123456789012")
 
     def test_accepts_import_com_substituicao_autorizada(self):
         plan = real_import_replace_plan()

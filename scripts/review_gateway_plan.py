@@ -8,7 +8,9 @@ import sys
 
 ALLOWED_METHODS = {"GET", "POST", "PATCH", "DELETE"}
 VPC_LINK_ADDRESS = "module.private_eks.aws_apigatewayv2_vpc_link.this"
+VPC_LINK_SECURITY_GROUP_ADDRESS = "module.private_eks.aws_security_group.link"
 VPC_LINK_ID_PATTERN = re.compile(r"[A-Za-z0-9]+")
+SECURITY_GROUP_ID_PATTERN = re.compile(r"sg-(?:[0-9a-f]{8}|[0-9a-f]{17})")
 
 
 def review(plan, expected_account, allow_destructive=False):
@@ -33,20 +35,44 @@ def review(plan, expected_account, allow_destructive=False):
             valid_actions = (*valid_actions, ["delete", "create"], ["create", "delete"])
         import_id = importing.get("id")
         failures = []
-        if item["address"] != VPC_LINK_ADDRESS:
-            failures.append("address fora do VPC Link esperado")
-        if item.get("type") != "aws_apigatewayv2_vpc_link":
-            failures.append("type diferente de aws_apigatewayv2_vpc_link")
+        if item["address"] == VPC_LINK_ADDRESS:
+            expected_type = "aws_apigatewayv2_vpc_link"
+            valid_id = isinstance(import_id, str) and VPC_LINK_ID_PATTERN.fullmatch(import_id)
+        elif item["address"] == VPC_LINK_SECURITY_GROUP_ADDRESS:
+            expected_type = "aws_security_group"
+            valid_id = isinstance(import_id, str) and SECURITY_GROUP_ID_PATTERN.fullmatch(import_id)
+            if actions not in (["no-op"], ["read"]):
+                failures.append("import do SG exigiria alteração/substituição")
+            after = item["change"].get("after") or {}
+            tags = after.get("tags_all") or {}
+            if not str(after.get("name", "")).startswith("autoflow-homolog-link-"):
+                failures.append("nome do SG não corresponde ao VPC Link homolog")
+            if after.get("description") != "Saida do VPC Link exclusivamente para o ALB interno":
+                failures.append("descrição do SG não corresponde ao VPC Link")
+            if after.get("ingress") != [] or after.get("egress") != []:
+                failures.append("regras inline do SG não estão vazias")
+            if any(tags.get(key) != value for key, value in {
+                "Project": "autoflow",
+                "Environment": "homolog",
+                "ManagedBy": "Terraform",
+            }.items()):
+                failures.append("tags do SG não correspondem ao ownership esperado")
+        else:
+            expected_type = None
+            valid_id = False
+            failures.append("address fora dos recursos suportados do VPC Link")
+        if expected_type and item.get("type") != expected_type:
+            failures.append(f"type diferente de {expected_type}")
         if actions not in valid_actions:
             failures.append("actions não permitidas para import")
-        if not isinstance(import_id, str) or not VPC_LINK_ID_PATTERN.fullmatch(import_id):
+        if not valid_id:
             failures.append("importing.id ausente ou inválido")
         if failures:
-            # O ID do recurso e os valores before/after são deliberadamente omitidos.
+            # IDs e valores before/after são deliberadamente omitidos.
             raise RuntimeError(
-                "Import do VPC Link rejeitado: " + "; ".join(failures)
+                "Import do VPC Link/SG rejeitado: " + "; ".join(failures)
                 + f". address={item['address']!r}, type={item.get('type')!r}, "
-                + f"actions={actions!r}, importing.id={'válido' if isinstance(import_id, str) and VPC_LINK_ID_PATTERN.fullmatch(import_id) else 'inválido/ausente'}, "
+                + f"actions={actions!r}, importing.id={'válido' if valid_id else 'inválido/ausente'}, "
                 + f"ALLOW_DESTRUCTIVE={'true' if allow_destructive else 'false'}."
             )
 
@@ -73,7 +99,7 @@ def review(plan, expected_account, allow_destructive=False):
 
     resources = {
         item["address"]: item["change"].get("after") or item["change"].get("before") or {}
-        for item in changes
+        for item in resource_changes
     }
     required = {
         "module.private_eks.aws_lb.this",
