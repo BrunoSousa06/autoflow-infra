@@ -14,8 +14,6 @@ O root `infra/` e o workflow `Pipeline` gerenciam somente VPC/EKS. New Relic tem
 
 Para reconstruir VPC/EKS após reset do Learner Lab, siga o [runbook de primeiro provisionamento EKS](docs/eks-primeiro-provisionamento.md); depois sincronize a License Key pelo pipeline da aplicação e execute `New Relic Pipeline` uma vez. Para ambiente com objetos New Relic preexistentes, siga o [runbook de migração de state](docs/newrelic-state-migration.md), sem executar migração em deploy normal.
 
-Para o procedimento completo de reconstrução de homologação, incluindo RDS, Lambda, aplicação, API Gateway, bootstrap e proposta de orquestração, consulte o [guia de reconstrução após reset do Learner Lab](docs/reconstrucao-learner-lab.md).
-
 A prova local de orquestração segura `autoflow-infra` → `autoflow-lambda`, seus pré-requisitos GitHub e limitações estão registrados no [plano da reconstrução](docs/specs/reconstrucao-learner-lab/plano-implementacao.md).
 
 Para diagnóstico dos nós EKS, consulte o [runbook](docs/eks-node-recovery.md). O provisionamento da EC2 runner está descrito em [Runner privado do GitHub Actions](docs/github-runner.md).
