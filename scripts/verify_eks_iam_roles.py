@@ -92,6 +92,29 @@ def _service_principal_matches(principal: Any, service: str) -> bool:
     return service in services or "*" in services
 
 
+def _has_exclusive_service_trust(policy: Any, service: str) -> bool:
+    """Identifica trust de serviço dedicado, sem ampliar para outros principals."""
+    if not isinstance(policy, dict):
+        return False
+    statements = _as_list(policy.get("Statement"))
+    allows = [
+        statement for statement in statements
+        if isinstance(statement, dict)
+        and str(statement.get("Effect", "")).lower() == "allow"
+        and _action_matches_assume_role(statement.get("Action"))
+    ]
+    if not allows:
+        return False
+    for statement in allows:
+        principal = statement.get("Principal")
+        if not isinstance(principal, dict) or set(principal) != {"Service"}:
+            return False
+        services = {str(item).lower() for item in _as_list(principal.get("Service"))}
+        if services != {service} or statement.get("Condition"):
+            return False
+    return True
+
+
 def validate_trust_policy(policy: Any, service: str, label: str) -> None:
     if not isinstance(policy, dict):
         raise RolePreflightError(f"{label}: trust policy ausente ou inválida.")
@@ -197,6 +220,7 @@ def discover_eks_iam_roles(
         raise RolePreflightError("iam:ListRoles retornou uma resposta incompleta.")
 
     candidates: dict[str, list[str]] = {"cluster": [], "node": []}
+    dedicated_cluster_candidates: list[str] = []
     service_by_kind = {"node": NODE_SERVICE} if active_cluster_role else {
         "cluster": CLUSTER_SERVICE,
         "node": NODE_SERVICE,
@@ -231,6 +255,10 @@ def discover_eks_iam_roles(
             except RolePreflightError:
                 continue
             candidates[kind].append(reference.arn)
+            if kind == "cluster" and _has_exclusive_service_trust(
+                role.get("AssumeRolePolicyDocument"), service
+            ):
+                dedicated_cluster_candidates.append(reference.arn)
 
     discovered: dict[str, str] = {}
     if active_cluster_role:
@@ -238,7 +266,11 @@ def discover_eks_iam_roles(
         # Sua ausência no IAM é tratada somente como role imutável/no-op durante validação.
         discovered["cluster"] = active_cluster_role
     else:
-        matches = candidates["cluster"]
+        if len(dedicated_cluster_candidates) > 1:
+            raise RolePreflightError(
+                "Mais de uma IAM Role dedicada válida para cluster; revisão manual necessária."
+            )
+        matches = dedicated_cluster_candidates or candidates["cluster"]
         if len(matches) != 1:
             raise RolePreflightError(
                 f"Esperada exatamente uma IAM Role válida para cluster; encontradas {len(matches)}."

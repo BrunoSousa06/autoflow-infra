@@ -197,6 +197,38 @@ class VerifyEksIamRolesTests(unittest.TestCase):
             (CLUSTER_ROLE, NODE_ROLE),
         )
 
+    def test_prefers_unique_cluster_role_with_exclusive_eks_service_trust(self):
+        dedicated = CLUSTER_ROLE
+        broad = f"arn:aws:iam::{ACCOUNT}:role/lab-administrator"
+        rows = [
+            {"RoleName": "eks-control-plane", "Path": "/", "Arn": dedicated,
+             "AssumeRolePolicyDocument": trust(CLUSTER_SERVICE)},
+            {"RoleName": "lab-administrator", "Path": "/", "Arn": broad,
+             "AssumeRolePolicyDocument": trust([CLUSTER_SERVICE, NODE_SERVICE, "lambda.amazonaws.com"])},
+            {"RoleName": "eks-workers", "Path": "/", "Arn": NODE_ROLE,
+             "AssumeRolePolicyDocument": trust(NODE_SERVICE)},
+        ]
+
+        def runner(command, **kwargs):
+            if command[1:3] == ["sts", "get-caller-identity"]:
+                payload = {"Account": ACCOUNT, "Arn": f"arn:aws:sts::{ACCOUNT}:assumed-role/admin/session"}
+            elif command[1:3] == ["eks", "describe-cluster"]:
+                raise subprocess.CalledProcessError(254, command, stderr="ResourceNotFoundException: cluster not found")
+            elif command[1:3] == ["iam", "list-roles"]:
+                payload = {"Roles": rows}
+            elif command[1:3] == ["iam", "list-attached-role-policies"]:
+                name = command[command.index("--role-name") + 1]
+                kind = "node" if name == "eks-workers" else "cluster"
+                payload = {"AttachedPolicies": policy_documents(REQUIRED_POLICIES[kind])}
+            else:
+                raise AssertionError(f"Operação AWS inesperada: {command[1:3]}")
+            return SimpleNamespace(stdout=json.dumps(payload))
+
+        self.assertEqual(
+            discover_eks_iam_roles(ACCOUNT, "eks-autoflow", "us-east-1", runner),
+            (dedicated, NODE_ROLE),
+        )
+
     def test_existing_cluster_role_resolves_otherwise_ambiguous_cluster_candidates(self):
         second_cluster_role = f"arn:aws:iam::{ACCOUNT}:role/previous-cluster-role"
         rows = [
@@ -296,7 +328,7 @@ class VerifyEksIamRolesTests(unittest.TestCase):
                 raise AssertionError(f"Operação AWS inesperada: {command[1:3]}")
             return SimpleNamespace(stdout=json.dumps(payload))
 
-        with self.assertRaisesRegex(RolePreflightError, "exatamente uma IAM Role válida para cluster"):
+        with self.assertRaisesRegex(RolePreflightError, "Mais de uma IAM Role dedicada válida para cluster"):
             discover_eks_iam_roles(ACCOUNT, "eks-autoflow", "us-east-1", runner)
 
     def test_plan_role_extraction_uses_exact_cluster_and_node_addresses(self):
