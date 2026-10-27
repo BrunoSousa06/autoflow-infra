@@ -11,10 +11,3 @@ resource "aws_security_group" "sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 }
-
-resource "aws_vpc_security_group_ingress_rule" "eks_self" {
-  security_group_id            = aws_eks_cluster.autoflow.vpc_config[0].cluster_security_group_id
-  referenced_security_group_id = aws_eks_cluster.autoflow.vpc_config[0].cluster_security_group_id
-  ip_protocol                  = "-1"
-  description                  = "Allow communication between EKS cluster security group members"
-}

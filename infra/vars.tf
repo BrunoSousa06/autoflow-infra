@@ -26,28 +26,19 @@ variable "cidr_vpc" {
   default = "10.0.0.0/16"
 }
 
-variable "role_arn" {
-  description = "ARN da role compartilhada legado, informado por configuração externa quando necessária."
-  type        = string
-  default     = null
-}
-
 variable "cluster_role_arn" {
-  description = "ARN da role de control plane EKS. Usa role_arn como fallback legado."
+  description = "ARN da role exclusiva do control plane EKS; não usar a role dos nodes."
   type        = string
-  default     = null
 }
 
 variable "node_role_arn" {
-  description = "ARN da role do managed node group. Usa role_arn como fallback legado."
+  description = "ARN da role exclusiva do managed node group; não usar a role do control plane."
   type        = string
-  default     = null
 }
 
 variable "operator_access_role_arn" {
-  description = "Optional IAM role granted EKS cluster access. Defaults to role_arn for backward compatibility."
+  description = "ARN IAM da role do caller AWS atual, resolvida pelo workflow via STS e iam:ListRoles."
   type        = string
-  default     = null
 }
 
 variable "instance_type" {

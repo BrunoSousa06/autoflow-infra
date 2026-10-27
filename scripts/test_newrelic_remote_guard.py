@@ -76,9 +76,9 @@ class NewRelicRemoteGuardTests(unittest.TestCase):
             account_resource_categories("US", "redacted-test-key", "homolog", "123456"),
             {"dashboard", "policy", "condition:order_processing_failure", "synthetics"},
         )
-        self.assertEqual(get.call_args_list[0].args[0], "https://api.newrelic.com/v2/alerts_policies.json")
-        self.assertEqual(get.call_args_list[1].args[0], "https://synthetics.newrelic.com/synthetics/api/v3/monitors")
-        self.assertEqual(get.call_args_list[2].args[0], "https://api.newrelic.com/v2/alerts_nrql_conditions.json?policy_id=42")
+        self.assertEqual(get.call_args_list[0].args[0], "https://api.newrelic.com/v2/alerts_policies.json?page=1")
+        self.assertEqual(get.call_args_list[1].args[0], "https://synthetics.newrelic.com/synthetics/api/v3/monitors?offset=0&limit=100")
+        self.assertEqual(get.call_args_list[2].args[0], "https://api.newrelic.com/v2/alerts_nrql_conditions.json?policy_id=42&page=1")
 
     @patch("newrelic_remote_guard._post_graphql")
     def test_dashboard_search_paginates_and_scopes_to_configured_account_and_region(self, post):
@@ -90,7 +90,33 @@ class NewRelicRemoteGuardTests(unittest.TestCase):
         self.assertEqual(post.call_count, 2)
         self.assertEqual(post.call_args_list[0].args[0], "https://api.eu.newrelic.com/graphql")
         self.assertIn("accountId = 123456", post.call_args_list[0].args[3]["query"])
-        self.assertEqual(post.call_args_list[1].args[3]["cursor"], "page-2")
+        self.assertIn("options: $options", post.call_args_list[0].args[2])
+        self.assertNotIn("cursor: $cursor", post.call_args_list[0].args[2])
+        self.assertEqual(post.call_args_list[1].args[3]["options"], {"cursor": "page-2"})
+
+    @patch("newrelic_remote_guard._dashboard_exists", return_value=False)
+    @patch("newrelic_remote_guard._get")
+    def test_remote_inventory_paginates_policies_and_synthetics(self, get, _dashboard_exists):
+        get.side_effect = [
+            {"policies": [{"id": 1, "name": "Unrelated"}] * 1000},
+            {"policies": [{"id": 42, "name": "AutoFlow homolog"}]},
+            {"monitors": [{"name": "Unrelated"}] * 100},
+            {"monitors": [{"name": "AutoFlow homolog public uptime"}]},
+            {"nrql_conditions": []},
+        ]
+
+        categories = account_resource_categories("US", "key", "homolog", "123456")
+
+        self.assertIn("policy", categories)
+        self.assertIn("synthetics", categories)
+        self.assertIn("page=2", get.call_args_list[1].args[0])
+        self.assertIn("offset=100&limit=100", get.call_args_list[3].args[0])
+
+    @patch("newrelic_remote_guard._dashboard_exists", return_value=False)
+    @patch("newrelic_remote_guard._get", return_value={"unexpected": []})
+    def test_malformed_rest_inventory_fails_closed(self, _get, _dashboard_exists):
+        with self.assertRaisesRegex(RemoteInventoryError, "resposta incompleta"):
+            account_resource_categories("US", "key", "homolog", "123456")
 
     @patch("newrelic_remote_guard.urlopen")
     def test_graphql_http_200_errors_fail_closed_without_leaking_error_payload(self, urlopen):

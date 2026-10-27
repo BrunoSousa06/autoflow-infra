@@ -37,6 +37,12 @@ class AccessImportTests(unittest.TestCase):
     def test_f_generated_configuration_has_no_historical_resource_identifiers(self):
         self.assertEqual(imports.render_imports(self.discover(set(), entry=False, association=False)), "")
 
+    def test_existing_access_resources_require_explicit_reconciliation_approval(self):
+        with self.assertRaisesRegex(RuntimeError, "reconciliação manual"):
+            imports.require_approval(self.discover(set()), False)
+        imports.require_approval(self.discover(set()), True)
+        imports.require_approval([], False)
+
     def test_non_not_found_aws_error_fails_closed(self):
         with patch("subprocess.run", return_value=type("Result", (), {
             "returncode": 1, "stderr": "ExpiredTokenException"

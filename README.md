@@ -6,7 +6,7 @@ Este repositório declara a infraestrutura AWS do AutoFlow com Terraform. A arqu
 
 Leia na ordem: [arquitetura e diagramas C4](docs/api-gateway/arquitetura.md), [ADR-001](docs/api-gateway/adr-001-api-gateway.md), [RFC técnica](docs/api-gateway/rfc-api-gateway.md), [runbook operacional](docs/api-gateway/runbook.md). O [README do root Terraform](infra/api-gateway/README.md) contém validações locais.
 
-Para configurar Actions e inputs Terraform, consulte o [catálogo de variables e secrets](docs/variables-and-secrets.md) e seu [histórico](docs/variables-changelog.md).
+Após reset do Learner Lab, consulte o [catálogo de variables e secrets](docs/variables-and-secrets.md): configure bucket/keys do Terraform State, região, conta esperada, três roles IAM distintas e credenciais temporárias AWS. Cluster, node group e Lambda são verificados/descobertos por AWS; não configure nomes manuais desses recursos.
 
 Para investigar nós EC2 que não registram no Kubernetes, consulte o [runbook de diagnóstico e recuperação EKS](docs/eks-node-recovery.md). O procedimento é somente leitura até a seção explícita de recuperação manual; não há reboot automatizado.
 
@@ -52,4 +52,4 @@ Os componentes usam states S3 separados: infraestrutura EKS, New Relic, aplicaç
 
 CI executa em PRs e valida pushes em feature branches; workflows de deploy não executam Plan/Apply nessas branches. VPC/EKS é planejado pelo `Pipeline`, New Relic pelo `New Relic Pipeline`; ambos vinculam o Plan criptografado ao commit e exigem dispatch + aprovação do Environment para Apply. O API Gateway mantém workflow próprio. Required reviewers precisam estar configurados efetivamente no GitHub. O workflow de criação automática de PRs é restrito a pushes em `main`. Consulte a [RFC](docs/api-gateway/rfc-api-gateway.md) e o [runbook](docs/api-gateway/runbook.md). Nenhum workflow instala gateways adicionais.
 
-Use `AWS_PROFILE`, `AWS_REGION`, `AWS_EXPECTED_ACCOUNT_ID` e `TF_VAR_*` localmente. Antes do Plan/Apply VPC/EKS, o workflow confirma a identidade AWS e executa `scripts/verify_eks_iam_roles.py` para verificar as roles externas, trust policies, AWS managed policies e a role do cluster existente. Os guards são somente leitura e não alteram IAM. GitHub Actions Variables contêm conta, região, bucket, keys e parâmetros não sensíveis; credenciais e dados sensíveis permanecem em GitHub Secrets.
+Use `AWS_PROFILE`, `AWS_REGION`, `AWS_EXPECTED_ACCOUNT_ID` e `TF_VAR_*` localmente. Antes do Plan VPC/EKS, `scripts/verify_eks_iam_roles.py --discover` identifica exatamente uma role de cluster e uma de node group por STS/IAM, validando conta, trust policies, AWS managed policies e a role do cluster existente. O Apply valida as roles gravadas no Plan aprovado, sem as redescobrir. Os guards são somente leitura e não alteram IAM. GitHub Actions Variables contêm conta, região, bucket e keys; credenciais e dados sensíveis permanecem em GitHub Secrets.

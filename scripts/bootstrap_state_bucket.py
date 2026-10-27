@@ -2,8 +2,11 @@
 
 import argparse
 import os
+import re
 import subprocess
 import sys
+
+from resolve_state_bucket import resolve_state_bucket
 
 
 def run(*args):
@@ -11,8 +14,9 @@ def run(*args):
 
 
 def bootstrap(bucket, region, expected_owner, approve_create):
-    if not bucket or not region or not expected_owner or not expected_owner.isdigit() or len(expected_owner) != 12:
+    if not region or not expected_owner or not expected_owner.isdigit() or len(expected_owner) != 12:
         raise ValueError("Bucket, região e AWS_EXPECTED_ACCOUNT_ID válidos são obrigatórios.")
+    bucket = resolve_state_bucket(bucket, expected_owner, region)
     created = False
     try:
         run("s3api", "head-bucket", "--bucket", bucket, "--expected-bucket-owner", expected_owner, "--region", region)
@@ -61,7 +65,13 @@ def main():
     try:
         bootstrap(os.environ.get("AWS_TERRAFORM_STATE_BUCKET"), os.environ.get("AWS_REGION"),
                   os.environ.get("AWS_EXPECTED_ACCOUNT_ID"), args.approve_create)
-    except (ValueError, RuntimeError, subprocess.CalledProcessError) as error:
+    except subprocess.CalledProcessError as error:
+        stderr = (error.stderr or "")
+        match = re.search(r"\(([^)]+)\) when calling", stderr)
+        code = match.group(1) if match else "erro AWS não classificado"
+        print(f"Bootstrap do bucket falhou: AWS retornou {code}.", file=sys.stderr)
+        return 1
+    except (ValueError, RuntimeError) as error:
         print(f"Bootstrap do bucket falhou: {error}", file=sys.stderr)
         return 1
     print("Bucket de Terraform State verificado e protegido.")

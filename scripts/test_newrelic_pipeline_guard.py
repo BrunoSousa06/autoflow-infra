@@ -10,6 +10,7 @@ from newrelic_pipeline_guard import (
     config_fingerprint,
     validate_inputs,
     verify_kubernetes_secret,
+    verify_application_workloads,
 )
 
 
@@ -148,6 +149,43 @@ class NewRelicPipelineGuardTests(unittest.TestCase):
         with patch("newrelic_pipeline_guard.subprocess.run", return_value=failed_bootstrap):
             with self.assertRaisesRegex(ConfigurationError, "Secret New Relic ausente"):
                 verify_kubernetes_secret(self.environment)
+
+    def test_workload_preflight_requires_ready_backend_frontend_and_services(self):
+        from pathlib import Path
+
+        healthy_deployments = {
+            "items": [
+                {"metadata": {"name": name}, "spec": {"replicas": 2}, "status": {"readyReplicas": 2}}
+                for name in ("autoflow-backend", "autoflow-frontend")
+            ]
+        }
+        services = {"items": [
+            {"metadata": {"name": name}}
+            for name in ("autoflow-backend-internal", "autoflow-frontend-internal")
+        ]}
+        results = [
+            SimpleNamespace(returncode=0, stdout=json.dumps(healthy_deployments)),
+            SimpleNamespace(returncode=0, stdout=json.dumps(services)),
+        ]
+        with patch("newrelic_pipeline_guard.subprocess.run", side_effect=results) as run:
+            verify_application_workloads()
+        self.assertEqual(run.call_count, 2)
+
+        unhealthy = json.loads(json.dumps(healthy_deployments))
+        unhealthy["items"][0]["status"]["readyReplicas"] = 1
+        with patch(
+            "newrelic_pipeline_guard.subprocess.run",
+            side_effect=(
+                SimpleNamespace(returncode=0, stdout=json.dumps(unhealthy)),
+                SimpleNamespace(returncode=0, stdout=json.dumps(services)),
+            ),
+        ):
+            with self.assertRaisesRegex(ConfigurationError, "não estão prontos"):
+                verify_application_workloads()
+
+        workflow = Path(__file__).parents[1] / ".github/workflows/newrelic.yml"
+        content = workflow.read_text(encoding="utf-8")
+        self.assertEqual(content.count("python scripts/newrelic_pipeline_guard.py verify-workloads"), 2)
 
     def test_fingerprint_changes_when_flags_or_environment_config_changes(self):
         original = config_fingerprint(self.environment)

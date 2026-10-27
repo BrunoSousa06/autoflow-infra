@@ -190,6 +190,49 @@ def verify_kubernetes_secret(environment: dict[str, str]) -> None:
         raise ConfigurationError("Resposta Kubernetes inválida ao verificar Secret New Relic.") from error
 
 
+def verify_application_workloads() -> None:
+    """Garante que a observabilidade não seja aplicada antes do deploy da aplicação."""
+    try:
+        deployments = subprocess.run(
+            ["kubectl", "get", "deployments", "autoflow-backend", "autoflow-frontend",
+             "--namespace", "default", "--output", "json"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        services = subprocess.run(
+            ["kubectl", "get", "services", "autoflow-backend-internal", "autoflow-frontend-internal",
+             "--namespace", "default", "--output", "json"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as error:
+        raise ConfigurationError("Não foi possível verificar os workloads Kubernetes do AutoFlow.") from error
+    if deployments.returncode or services.returncode:
+        raise ConfigurationError("Deployments ou Services do AutoFlow ausentes/inacessíveis; New Relic bloqueado.")
+    try:
+        deployment_items = json.loads(deployments.stdout).get("items", [])
+        service_items = json.loads(services.stdout).get("items", [])
+        deployment_names = {item["metadata"]["name"] for item in deployment_items}
+        service_names = {item["metadata"]["name"] for item in service_items}
+        ready = all(
+            isinstance(item.get("spec", {}).get("replicas"), int)
+            and item["spec"]["replicas"] > 0
+            and item.get("status", {}).get("readyReplicas", 0) >= item["spec"]["replicas"]
+            for item in deployment_items
+        )
+    except (AttributeError, KeyError, TypeError, json.JSONDecodeError) as error:
+        raise ConfigurationError("Resposta Kubernetes inválida ao verificar workloads do AutoFlow.") from error
+    if (
+        deployment_names != {"autoflow-backend", "autoflow-frontend"}
+        or service_names != {"autoflow-backend-internal", "autoflow-frontend-internal"}
+        or len(deployment_items) != 2
+        or not ready
+    ):
+        raise ConfigurationError("Deployments ou Services do AutoFlow não estão prontos; New Relic bloqueado.")
+
+
 def config_fingerprint(environment: dict[str, str]) -> str:
     validate_inputs(environment)
     normalized = {name: environment.get(name, "") for name in FINGERPRINT_INPUTS}
@@ -207,6 +250,10 @@ def main(arguments: list[str] | None = None) -> int:
         if arguments == ["verify-secret"]:
             verify_kubernetes_secret(dict(os.environ))
             print("Referência de Secret New Relic verificada sem ler ou exibir seu conteúdo.")
+            return 0
+        if arguments == ["verify-workloads"]:
+            verify_application_workloads()
+            print("Deployments e Services do AutoFlow estão disponíveis para observabilidade.")
             return 0
         if len(arguments) == 2 and arguments[0] == "fingerprint":
             fingerprint = config_fingerprint(dict(os.environ))
@@ -231,7 +278,7 @@ def main(arguments: list[str] | None = None) -> int:
             return 0
         print(
             "Uso: newrelic_pipeline_guard.py validate | verify-secret | fingerprint <arquivo> | "
-            "verify-fingerprint <arquivo> | check-plan <terraform-plan.json> | "
+            "verify-workloads | verify-fingerprint <arquivo> | check-plan <terraform-plan.json> | "
             "check-legacy-plan <terraform-plan.json>",
             file=sys.stderr,
         )

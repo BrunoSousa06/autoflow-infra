@@ -19,6 +19,8 @@ backend.*.hcl
 *.tfplan*
 *.plan*
 infra/kong/.homolog-tls/
+infra/eks-network-imports.auto.tf
+infra/eks-access-imports.auto.tf
 .env
 .env.*
 credentials

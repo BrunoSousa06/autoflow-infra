@@ -11,6 +11,9 @@ from verify_eks_iam_roles import (
     REQUIRED_POLICIES,
     RolePreflightError,
     cluster_role_matches,
+    discover_eks_iam_roles,
+    require_cluster_noop,
+    role_arns_from_plan,
     validate_attached_policies,
     validate_role_configuration,
     validate_trust_policy,
@@ -152,6 +155,198 @@ class VerifyEksIamRolesTests(unittest.TestCase):
                 "eks-autoflow", "us-east-1", ACCOUNT, CLUSTER_ROLE, NODE_ROLE, runner
             )
 
+    def test_discovers_unique_cluster_and_node_roles_by_trust_and_required_policies(self):
+        role_rows = [
+            {
+                "RoleName": "eks-control-plane",
+                "Path": "/lab/",
+                "Arn": CLUSTER_ROLE,
+                "AssumeRolePolicyDocument": trust(CLUSTER_SERVICE),
+            },
+            {
+                "RoleName": "eks-workers",
+                "Path": "/lab/",
+                "Arn": NODE_ROLE,
+                "AssumeRolePolicyDocument": trust(NODE_SERVICE),
+            },
+            {
+                "RoleName": "unrelated",
+                "Path": "/lab/",
+                "Arn": f"arn:aws:iam::{ACCOUNT}:role/unrelated",
+                "AssumeRolePolicyDocument": trust("lambda.amazonaws.com"),
+            },
+        ]
+
+        def runner(command, **kwargs):
+            if command[1:3] == ["sts", "get-caller-identity"]:
+                payload = {"Account": ACCOUNT, "Arn": f"arn:aws:sts::{ACCOUNT}:assumed-role/admin/session"}
+            elif command[1:3] == ["eks", "describe-cluster"]:
+                payload = {"cluster": {"roleArn": CLUSTER_ROLE}}
+            elif command[1:3] == ["iam", "list-roles"]:
+                payload = {"Roles": role_rows}
+            elif command[1:3] == ["iam", "list-attached-role-policies"]:
+                role_name = command[command.index("--role-name") + 1]
+                required = REQUIRED_POLICIES["cluster" if role_name == "eks-control-plane" else "node"]
+                payload = {"AttachedPolicies": policy_documents(required)}
+            else:
+                raise AssertionError(f"Operação AWS inesperada: {command[1:3]}")
+            return SimpleNamespace(stdout=json.dumps(payload))
+
+        self.assertEqual(
+            discover_eks_iam_roles(ACCOUNT, "eks-autoflow", "us-east-1", runner),
+            (CLUSTER_ROLE, NODE_ROLE),
+        )
+
+    def test_existing_cluster_role_resolves_otherwise_ambiguous_cluster_candidates(self):
+        second_cluster_role = f"arn:aws:iam::{ACCOUNT}:role/previous-cluster-role"
+        rows = [
+            {
+                "RoleName": "eks-control-plane",
+                "Path": "/lab/",
+                "Arn": CLUSTER_ROLE,
+                "AssumeRolePolicyDocument": trust(CLUSTER_SERVICE),
+            },
+            {
+                "RoleName": "previous-cluster-role",
+                "Path": "/lab/",
+                "Arn": second_cluster_role,
+                "AssumeRolePolicyDocument": trust(CLUSTER_SERVICE),
+            },
+            {
+                "RoleName": "eks-workers",
+                "Path": "/lab/",
+                "Arn": NODE_ROLE,
+                "AssumeRolePolicyDocument": trust(NODE_SERVICE),
+            },
+        ]
+
+        def runner(command, **kwargs):
+            if command[1:3] == ["sts", "get-caller-identity"]:
+                payload = {"Account": ACCOUNT, "Arn": f"arn:aws:sts::{ACCOUNT}:assumed-role/admin/session"}
+            elif command[1:3] == ["eks", "describe-cluster"]:
+                payload = {"cluster": {"roleArn": CLUSTER_ROLE}}
+            elif command[1:3] == ["iam", "list-roles"]:
+                payload = {"Roles": rows}
+            elif command[1:3] == ["iam", "list-attached-role-policies"]:
+                name = command[command.index("--role-name") + 1]
+                kind = "node" if name == "eks-workers" else "cluster"
+                payload = {"AttachedPolicies": policy_documents(REQUIRED_POLICIES[kind])}
+            else:
+                raise AssertionError(f"Operação AWS inesperada: {command[1:3]}")
+            return SimpleNamespace(stdout=json.dumps(payload))
+
+        self.assertEqual(
+            discover_eks_iam_roles(ACCOUNT, "eks-autoflow", "us-east-1", runner),
+            (CLUSTER_ROLE, NODE_ROLE),
+        )
+
+    def test_role_discovery_fails_closed_when_missing_or_ambiguous(self):
+        def role(name, service):
+            return {
+                "RoleName": name,
+                "Path": "/lab/",
+                "Arn": f"arn:aws:iam::{ACCOUNT}:role/{name}",
+                "AssumeRolePolicyDocument": trust(service),
+            }
+
+        for node_roles in ([], [role("worker-a", NODE_SERVICE), role("worker-b", NODE_SERVICE)]):
+            cluster = role("cluster", CLUSTER_SERVICE)
+            cluster["Arn"] = CLUSTER_ROLE
+            rows = [cluster, *node_roles]
+
+            def runner(command, **kwargs):
+                if command[1:3] == ["sts", "get-caller-identity"]:
+                    payload = {"Account": ACCOUNT, "Arn": f"arn:aws:sts::{ACCOUNT}:assumed-role/admin/session"}
+                elif command[1:3] == ["eks", "describe-cluster"]:
+                    payload = {"cluster": {"roleArn": rows[0]["Arn"]}}
+                elif command[1:3] == ["iam", "list-roles"]:
+                    payload = {"Roles": rows}
+                elif command[1:3] == ["iam", "list-attached-role-policies"]:
+                    name = command[command.index("--role-name") + 1]
+                    required = REQUIRED_POLICIES["cluster" if name in {"cluster", "eks-control-plane"} else "node"]
+                    payload = {"AttachedPolicies": policy_documents(required)}
+                else:
+                    raise AssertionError(f"Operação AWS inesperada: {command[1:3]}")
+                return SimpleNamespace(stdout=json.dumps(payload))
+
+            with self.subTest(matches=len(node_roles)), self.assertRaisesRegex(
+                RolePreflightError, "exatamente uma IAM Role válida para node"
+            ):
+                discover_eks_iam_roles(ACCOUNT, "eks-autoflow", "us-east-1", runner)
+
+    def test_cluster_role_ambiguity_without_existing_cluster_is_blocked(self):
+        rows = [
+            {"RoleName": "cluster-a", "Path": "/lab/", "Arn": f"arn:aws:iam::{ACCOUNT}:role/cluster-a", "AssumeRolePolicyDocument": trust(CLUSTER_SERVICE)},
+            {"RoleName": "cluster-b", "Path": "/lab/", "Arn": f"arn:aws:iam::{ACCOUNT}:role/cluster-b", "AssumeRolePolicyDocument": trust(CLUSTER_SERVICE)},
+            {"RoleName": "worker", "Path": "/lab/", "Arn": f"arn:aws:iam::{ACCOUNT}:role/worker", "AssumeRolePolicyDocument": trust(NODE_SERVICE)},
+        ]
+
+        def runner(command, **kwargs):
+            if command[1:3] == ["sts", "get-caller-identity"]:
+                payload = {"Account": ACCOUNT, "Arn": f"arn:aws:sts::{ACCOUNT}:assumed-role/admin/session"}
+            elif command[1:3] == ["eks", "describe-cluster"]:
+                raise subprocess.CalledProcessError(254, command, stderr="ResourceNotFoundException: cluster not found")
+            elif command[1:3] == ["iam", "list-roles"]:
+                payload = {"Roles": rows}
+            elif command[1:3] == ["iam", "list-attached-role-policies"]:
+                name = command[command.index("--role-name") + 1]
+                kind = "node" if name == "worker" else "cluster"
+                payload = {"AttachedPolicies": policy_documents(REQUIRED_POLICIES[kind])}
+            else:
+                raise AssertionError(f"Operação AWS inesperada: {command[1:3]}")
+            return SimpleNamespace(stdout=json.dumps(payload))
+
+        with self.assertRaisesRegex(RolePreflightError, "exatamente uma IAM Role válida para cluster"):
+            discover_eks_iam_roles(ACCOUNT, "eks-autoflow", "us-east-1", runner)
+
+    def test_plan_role_extraction_uses_exact_cluster_and_node_addresses(self):
+        plan = {"resource_changes": [
+            {"address": "aws_eks_cluster.autoflow", "change": {"after": {"role_arn": CLUSTER_ROLE}}},
+            {"address": "aws_eks_node_group.node_group", "change": {"after": {"node_role_arn": NODE_ROLE}}},
+        ]}
+        self.assertEqual(role_arns_from_plan(plan), (CLUSTER_ROLE, NODE_ROLE))
+
+    def test_plan_role_extraction_rejects_missing_or_unknown_role_arns(self):
+        with self.assertRaisesRegex(RolePreflightError, "não contém roles EKS completas"):
+            role_arns_from_plan({"resource_changes": []})
+        plan = {"resource_changes": [
+            {"address": "aws_eks_cluster.autoflow", "change": {"after": {"role_arn": None}}},
+            {"address": "aws_eks_node_group.node_group", "change": {"after": {"node_role_arn": NODE_ROLE}}},
+        ]}
+        with self.assertRaisesRegex(RolePreflightError, "role conhecida"):
+            role_arns_from_plan(plan)
+
+    def test_missing_active_cluster_role_is_tolerated_only_for_unchanged_cluster(self):
+        def runner(command, **kwargs):
+            if command[1:3] == ["eks", "describe-cluster"]:
+                payload = {"cluster": {"roleArn": CLUSTER_ROLE}}
+                return SimpleNamespace(stdout=json.dumps(payload))
+            if command[1:3] == ["iam", "get-role"]:
+                role_name = command[command.index("--role-name") + 1]
+                if role_name == "eks-control-plane":
+                    raise subprocess.CalledProcessError(254, command, stderr="NoSuchEntity")
+                payload = {"Role": {"Arn": NODE_ROLE, "AssumeRolePolicyDocument": trust(NODE_SERVICE)}}
+                return SimpleNamespace(stdout=json.dumps(payload))
+            if command[1:3] == ["iam", "list-attached-role-policies"]:
+                return SimpleNamespace(stdout=json.dumps({"AttachedPolicies": policy_documents(REQUIRED_POLICIES["node"])}))
+            raise AssertionError(f"Operação AWS inesperada: {command[1:3]}")
+
+        self.assertTrue(verify_eks_iam_roles(
+            "eks-autoflow", "us-east-1", ACCOUNT, CLUSTER_ROLE, NODE_ROLE,
+            run=runner, allow_missing_existing_cluster_role=True,
+        ))
+
+    def test_plan_with_missing_active_cluster_role_must_be_noop(self):
+        require_cluster_noop({"resource_changes": [{
+            "address": "aws_eks_cluster.autoflow",
+            "change": {"actions": ["no-op"]},
+        }]})
+        with self.assertRaisesRegex(RolePreflightError, "preservar o cluster sem alterações"):
+            require_cluster_noop({"resource_changes": [{
+                "address": "aws_eks_cluster.autoflow",
+                "change": {"actions": ["delete", "create"]},
+            }]})
+
     def test_workflow_validates_roles_before_plan_and_apply(self):
         workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pipeline.yml").read_text(encoding="utf-8")
         plan = workflow.split("  plan:", 1)[1].split("\n  apply:\n", 1)[0]
@@ -162,9 +357,15 @@ class VerifyEksIamRolesTests(unittest.TestCase):
         self.assertLess(plan.index("python scripts/verify_aws_account.py"), plan_role_check)
         self.assertLess(plan_role_check, plan.index("eks_cluster_preflight.py"))
         self.assertLess(apply.index("python scripts/verify_aws_account.py"), apply_role_check)
-        self.assertLess(apply_role_check, apply.index("eks_endpoint_access.py authorize"))
-        self.assertIn("AWS_EKS_CLUSTER_ROLE_ARN: ${{ vars.AWS_EKS_CLUSTER_ROLE_ARN }}", plan)
-        self.assertIn("AWS_EKS_NODE_ROLE_ARN: ${{ vars.AWS_EKS_NODE_ROLE_ARN }}", plan)
+        self.assertLess(apply_role_check, apply.index("terraform apply -input=false infra.tfplan"))
+        self.assertIn("verify_eks_iam_roles.py --discover", plan)
+        self.assertIn("verify_eks_iam_roles.py --plan-json", apply)
+        self.assertNotIn("vars.AWS_EKS_CLUSTER_ROLE_ARN", workflow)
+        self.assertNotIn("vars.AWS_EKS_NODE_ROLE_ARN", workflow)
+        self.assertLess(plan.index("verify_eks_iam_roles.py --discover"), plan.index("terraform plan"))
+        self.assertLess(plan.index("terraform plan"), plan.index("verify_eks_iam_roles.py --plan-json"))
+        self.assertLess(apply.index("verify_eks_iam_roles.py --plan-json"), apply.index("terraform apply -input=false infra.tfplan"))
+        self.assertNotIn("terraform plan", apply)
 
 
 if __name__ == "__main__":

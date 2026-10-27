@@ -5,6 +5,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -57,6 +58,13 @@ def render_imports(imports):
     ) + ("\n" if imports else "")
 
 
+def require_approval(imports, approved):
+    if imports and not approved:
+        raise RuntimeError(
+            "Access Entry/Policy EKS existem fora do State; habilite a reconciliação manualmente antes de importar."
+        )
+
+
 def state_addresses():
     try:
         state = subprocess.run(["terraform", "-chdir=infra", "state", "list"], check=True,
@@ -91,12 +99,19 @@ def main():
     parser.add_argument("--principal", required=True)
     parser.add_argument("--region", required=True)
     parser.add_argument("--output", default="eks-access-imports.auto.tf")
+    parser.add_argument("--allow-imports", choices=("true", "false"), default="false")
     args = parser.parse_args()
-    addresses = state_addresses()
-    imports = discover_imports(["aws"], addresses, args.cluster, args.principal, args.region)
-    Path(args.output).write_text(render_imports(imports), encoding="utf-8")
+    try:
+        addresses = state_addresses()
+        imports = discover_imports(["aws"], addresses, args.cluster, args.principal, args.region)
+        require_approval(imports, args.allow_imports == "true")
+        Path(args.output).write_text(render_imports(imports), encoding="utf-8")
+    except RuntimeError as error:
+        print(f"Imports de acesso EKS bloqueados: {error}", file=sys.stderr)
+        return 1
     print(f"Imports declarativos necessários: {len(imports)}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
