@@ -25,13 +25,13 @@ Dependências comprovadas pelos roots e seus workflows:
 | Root | Dependências obrigatórias | Evidência operacional |
 |---|---|---|
 | VPC/EKS (`autoflow-infra/infra`) | Nenhuma dependência de Terraform remoto | Provisiona VPC, subnets, cluster e node group. Não instala nem planeja New Relic. |
-| New Relic (`autoflow-infra/infra/newrelic`) | VPC/EKS existentes e, para Helm, cluster/node group `ACTIVE`, acesso Kubernetes e Secret | State S3 próprio; consulta EKS existente e verifica o Secret. Guards comparam o state legado/novo e inventário remoto antes de criar. |
-| RDS (`autoflow-db/infra`) | State EKS, VPC/subnets e cluster | Terraform lê `private_subnet_ids` do state `eks/terraform.tfstate` e consulta o cluster. O pipeline exige state EKS e bloqueia exclusões/substituições. |
+| RDS (`autoflow-db/infra`) | State EKS, VPC/subnets e cluster | Terraform lê `private_subnet_ids` e `eks_cluster_name` do state EKS. O pipeline exige state EKS e bloqueia exclusões/substituições. |
 | Lambda (`autoflow-lambda/infra`) | States EKS e RDS | Terraform lê subnet privada do EKS e SG/endpoint do RDS. Workflow exige ambos os objects de state. |
-| Aplicação (`autoflow/infra`) | EKS acessível e state RDS | Terraform consulta EKS e lê RDS remoto; Apply também grava Secrets Kubernetes e sincroniza New Relic. |
+| Aplicação (`autoflow/infra`) | EKS acessível, state RDS e API Gateway existente | Terraform consulta EKS, lê RDS e descobre o endpoint público do API Gateway; Apply também grava Secrets Kubernetes e sincroniza a License Key New Relic. |
 | API Gateway (`autoflow-infra/infra/api-gateway`) | State/cluster/node group EKS e Lambda existente | Terraform lê VPC/subnets do state EKS, consulta EKS/node group e Lambda por data sources. Não lê state RDS e não depende diretamente de executar o workflow RDS. |
+| New Relic (`autoflow-infra/infra/newrelic`) | VPC/EKS e aplicação disponíveis | State S3 próprio; descobre cluster, confirma node groups ativos, acesso Kubernetes e Deployments/Services da aplicação prontos; valida Secret quando o agente Kubernetes está habilitado. Inventaria ownership remoto antes de criar. |
 
-O Terraform do API Gateway não declara dependência de state RDS. Ele exige Lambda, EKS e node group ativos. O serviço precisa da aplicação atendendo nos targets para o caminho de negócio ficar saudável, mas isso é dependência funcional/runtime, não requisito para criar API Gateway, VPC Link e ALB. Recomenda-se provisionar aplicação antes do gateway para o smoke ponta a ponta.
+O Terraform do API Gateway não declara dependência direta do state RDS nem da aplicação: exige Lambda, EKS e node group ativos e pode criar VPC Link/ALB antes de haver targets saudáveis. A aplicação, por sua vez, precisa descobrir o endpoint do API Gateway. Portanto, para reconstrução limpa, o gateway antecede a aplicação; a validação ponta a ponta ocorre depois de ambas.
 
 ## Ordem de reconstrução declarada
 
@@ -42,17 +42,16 @@ O Terraform do API Gateway não declara dependência de state RDS. Ele exige Lam
 
 Ambos os workflows New Relic e VPC/EKS usam os Environments `homolog` (`develop`) e `production` (`main`) e exigem Required reviewers efetivos para Apply. New Relic preserva a passphrase de criptografia de Plan existente, checksums e artifact de curta retenção vinculado ao commit. Não iniciar Plans de deploy em branches feature.
 
-1. **Preparar o ambiente**: iniciar o Learner Lab, renovar as credenciais temporárias em conjunto, verificar conta/região e confirmar configurações GitHub. Não iniciar plan/apply se a identidade externa divergir.
-2. **Bootstrap/recuperar Terraform State**: verificar bucket e keys antes de roots dependentes. O workflow `Pipeline` de `autoflow-infra` inclui bootstrap de bucket no job de Plan; o input `approve_state_bucket_creation` está com default `true` no workflow atual. Portanto, ao usar `workflow_dispatch`, confira e ajuste conscientemente esse input antes de iniciar; o valor atual não exige uma escolha afirmativa manual. O bootstrap cria/configura o bucket somente quando detecta ausência conclusiva e falha fechado em AccessDenied/erro ambíguo; para bucket existente, apenas verifica controles. Um erro de acesso não significa bucket ausente. Em reset parcial, inventariar recursos sobreviventes e recuperar/importar state antes de plan; não aplicar state vazio sobre recursos existentes.
-3. **VPC/EKS**: executar `Pipeline` em `autoflow-infra`, branch `develop`, com `apply=true` no dispatch. Plan/Apply provisionam ou reconciliam rede, EKS e node group. Required reviewers do Environment `homolog` continuam necessários. New Relic é completamente separada e não participa deste Plan.
-4. **RDS**: executar o workflow `RDS Pipeline` em `autoflow-db/develop`. Plan/Apply exige state EKS e revisão de exclusões; o guard atual bloqueia exclusões/substituições sem override.
-5. **Lambda**: executar `Lambda Pipeline` em `autoflow-lambda/develop`. Requer EKS e RDS; publica pacote imutável no bucket configurado e usa o plan/artifact vinculado à execução.
-6. **Aplicação e bootstrap da licença**: executar `Pipeline` em `autoflow/develop`. Depois da aprovação do Apply, publica imagens, atualiza Secrets Kubernetes da aplicação e, se `ENABLE_NEWRELIC_APM=true`, reconcilia `NEW_RELIC_LICENSE_KEY` com Secrets Manager e `Secret/newrelic-license` no namespace `default`. Se key não existir no Secrets Manager, o script cria; se divergir do GitHub Secret, bloqueia sem revelar valores. A aplicação precisa estar disponível para servir os targets.
-7. **New Relic**: executar uma vez o workflow independente `New Relic Pipeline` em `autoflow-infra/develop`, depois de sincronizar a License Key pela aplicação. O Plan/Apply usa state e key próprios e não reaplica VPC/EKS. Para dashboards, alertas e Synthetic, habilitar as flags e configurar inputs no Environment `homolog`.
-8. **API Gateway**: executar `Migração HTTP API` em `autoflow-infra/develop`. Exige state/plataforma EKS, cluster/node group `ACTIVE` e função Lambda existente. Revisa exclusões e requer aprovação no Environment `homolog`.
-9. **Validar**: smoke ponta a ponta a partir de `autoflow`; conferir API Gateway, VPC Link, ALB/targets, frontend, login e rota autenticada conforme o runbook do gateway.
+1. **Bootstrap e credenciais**: iniciar o Learner Lab, obter credenciais temporárias da mesma sessão, configurar bucket Terraform State e keys, conta/região e proteções do GitHub. O workflow VPC/EKS tem preflight/bootstrap seguro do bucket; ausência conclusiva pode criar bucket somente pelo caminho aprovado, enquanto AccessDenied/erro ambíguo bloqueia. Se State não existir, recursos de rede sobreviventes só são reconciliados no `workflow_dispatch` com `approve_eks_state_reconciliation=true`; a pipeline gera import blocks somente para VPC, subnets privadas, route table privada e associações cuja conta, CIDR, tags e IDs correspondam exatamente ao root. Outros recursos remanescentes fora desse mapeamento (por exemplo, subnet pública, IGW, NAT, SG ou cluster EKS sem State) bloqueiam o Plan para evitar duplicação e exigem reconciliação específica. Se não houver recursos sobreviventes, o primeiro provisionamento segue normalmente; State existente continua sendo usado.
+2. **VPC/EKS**: executar `Pipeline` em `autoflow-infra/develop`, aplicar VPC, subnets, cluster, node group e outputs do State. Required reviewers continuam obrigatórios. Esta etapa deve terminar antes dos consumers de `eks/terraform.tfstate`.
+3. **RDS**: executar `RDS Pipeline` em `autoflow-db/develop`. O workflow exige o State EKS; o root consome subnet IDs e nome do cluster pelos outputs Terraform e bloqueia exclusões/substituições.
+4. **Lambda**: executar `Lambda Pipeline` em `autoflow-lambda/develop`. Exige States EKS e RDS; publica pacote imutável no bucket Terraform State, sem bucket adicional, e usa o Plan/artifact daquela execução.
+5. **API Gateway**: executar `Migração HTTP API` em `autoflow-infra/develop`. Exige EKS/node group ativos, State EKS e Lambda existente. Pode criar VPC Link e ALB antes da aplicação; seus targets ainda não estarão saudáveis.
+6. **Aplicação**: executar `Pipeline` em `autoflow/develop`. Exige EKS acessível, State RDS e API Gateway existente; descobre cluster e endpoint público. Após aprovação, publica imagens, atualiza Secrets Kubernetes e, com `ENABLE_NEWRELIC_APM=true`, sincroniza License Key do Secrets Manager para `Secret/newrelic-license`.
+7. **New Relic**: executar independentemente `New Relic Pipeline` em `autoflow-infra/develop`, após aplicação pronta e sincronização da License Key. O preflight exige EKS/node groups ativos, Deployments/Services AutoFlow prontos e, quando habilitado, Secret válido. Usa State próprio e não reaplica infraestrutura. Para dashboards, alertas e Synthetic, configure as flags/inputs de `homolog`.
+8. **Validar**: executar smokes da aplicação e conferir API Gateway, VPC Link, ALB/targets, frontend, login e rota autenticada.
 
-Os workflows de RDS, Lambda, aplicação e API Gateway executam Apply após o respectivo gate de aprovação do Environment quando são disparados por `develop`; não há input de `apply` nesses workflows. O Apply de VPC/EKS é controlado por `apply` no dispatch, ou pelo comportamento de push já existente. Não use push como mecanismo de reconstrução deliberado sem revisar as condições do workflow.
+Na reconstrução definida, nenhuma etapa de provisionamento entre 2 e 7 pode ser executada em paralelo: cada uma consome outputs/recursos da anterior. Apenas CI estático e validações locais independentes podem correr em paralelo. Os workflows permanecem independentes e não são disparados automaticamente em cadeia. RDS, Lambda, aplicação e API Gateway executam Apply após o respectivo gate do Environment em `develop`; VPC/EKS e New Relic exigem `workflow_dispatch` com `apply=true`. Não use push como mecanismo de reconstrução deliberado.
 
 ### Diagrama da sequência atual
 
@@ -69,10 +68,10 @@ sequenceDiagram
    I-->>Operador: EKS/node group disponível
   Operador->>D: Dispatch; Plan + aprovação/Apply
   Operador->>L: Dispatch; Plan + aprovação/Apply
-  Operador->>A: Dispatch; build/publicação + Plan + aprovação/Apply
-  A-->>A: Sincroniza License Key em Secrets Manager e Kubernetes
+   Operador->>G: Dispatch do workflow API Gateway; Plan + aprovação/Apply
+   Operador->>A: Dispatch; build/publicação + Plan + aprovação/Apply
+   A-->>A: Sincroniza License Key em Secrets Manager e Kubernetes
    Operador->>N: Dispatch independente New Relic; Plan + aprovação/Apply
-  Operador->>G: Dispatch do workflow API Gateway; Plan + aprovação/Apply
   Operador->>A: Smoke tests (dispatch opcional ou pós-deploy)
 ```
 
@@ -82,10 +81,10 @@ Configurar os dados abaixo em cada repositório/Environment conforme os catálog
 
 | Repositório | Secrets relevantes | Variables relevantes |
 |---|---|---|
-| `autoflow-infra` | Credenciais temporárias AWS `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`; `TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE`; `NEW_RELIC_API_KEY` para inventário/recursos New Relic | `AWS_REGION`, `AWS_EXPECTED_ACCOUNT_ID`, `AWS_TERRAFORM_STATE_BUCKET`, keys `AWS_TF_STATE_KEY_INFRA`, `AWS_TF_STATE_KEY_NEWRELIC` e `AWS_TF_STATE_KEY_GATEWAY`, nomes/roles EKS, Lambda, node group e CORS; flags/configurações New Relic; `TERRAFORM_APPLY_APPROVAL_CONFIGURED` |
-| `autoflow-db` | Credenciais AWS; `DATABASE_USERNAME`, `DATABASE_PASSWORD` | Região/conta/bucket, key RDS e `AWS_INFRA_STATE_KEY`; guard `TERRAFORM_APPLY_APPROVAL_CONFIGURED` |
-| `autoflow-lambda` | Credenciais AWS; `DATABASE_USERNAME`, `DATABASE_PASSWORD`, `JWT_SECRET` | Região/conta/bucket, keys EKS/RDS/Lambda, bucket/role/nome Lambda; guard de aprovação |
-| `autoflow` | Credenciais AWS; `TF_PLAN_ENCRYPTION_KEY`; `DOCKERHUB_PASSWORD`; secrets de aplicação `AUTOFLOW_*`; Environment Secret `NEW_RELIC_LICENSE_KEY` em homolog | Região/conta/bucket/key aplicação, Docker Hub, cluster, origem/CORS API Gateway, `ENABLE_NEWRELIC_APM`, `NEW_RELIC_LICENSE_SECRET_ID`; guard de aprovação |
+| `autoflow-infra` | Credenciais temporárias AWS `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`; `TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE`; `NEW_RELIC_API_KEY` | `AWS_REGION`, `AWS_EXPECTED_ACCOUNT_ID`, `AWS_TERRAFORM_STATE_BUCKET`, keys de State, CORS, flags/inputs New Relic e proteção de aprovação. As roles de cluster/node e a role operador são descobertas após validação STS/IAM; não cadastrar ARNs. Cluster, Lambda e node group são descobertos. |
+| `autoflow-db` | Credenciais AWS; `DATABASE_USERNAME`, `DATABASE_PASSWORD` | Região/conta/bucket, keys RDS/EKS e proteção de aprovação. Cluster é lido do output do State EKS. |
+| `autoflow-lambda` | Credenciais AWS; `DATABASE_USERNAME`, `DATABASE_PASSWORD`, `JWT_SECRET` | Região/conta/bucket, keys EKS/RDS/Lambda, ARN da role de execução e proteção de aprovação. Nome Lambda e bucket de pacote não são configurados à parte. |
+| `autoflow` | Credenciais AWS; `TF_PLAN_ENCRYPTION_KEY`; `DOCKERHUB_PASSWORD`; secrets de aplicação `AUTOFLOW_*`; `NEW_RELIC_LICENSE_KEY` no Environment homolog | Região/conta/bucket/key aplicação, Docker Hub, CORS, `ENABLE_NEWRELIC_APM`, `NEW_RELIC_LICENSE_SECRET_ID` e proteção de aprovação. Cluster e endpoint API Gateway são descobertos. |
 
 Os pipelines não compartilham automaticamente secrets entre repositórios. Configure-os no escopo onde são consumidos. Credenciais AWS Academy são temporárias e precisam ser renovadas no reinício da sessão. Configure Required reviewers efetivos em cada Environment `homolog`; a variável de guard não substitui a regra do GitHub. `AWS_EXPECTED_ACCOUNT_ID` é configuração externa e deve ser comparada com `sts get-caller-identity` pelos jobs; nenhum ID deve ser embutido em uma proposta de orquestração.
 
@@ -95,7 +94,7 @@ Os pipelines não compartilham automaticamente secrets entre repositórios. Conf
 - RDS/Lambda/aplicação/gateway usam `develop` para homolog. `main` não é caminho de reconstrução de homolog e deve permanecer separado como production quando o workflow suporta produção.
 - VPC/EKS usa o Environment selecionado pela branch; dispatch em `main` é production. Em `develop`, dispatch com `apply=true` habilita Apply; branch/inputs de destruição não substituem Required reviewers.
 - Guard destrutivo e de identidade é específico por root. RDS e Lambda bloqueiam ações destrutivas; VPC/EKS, API Gateway e New Relic têm guards e approvals explícitos. O root legado bloqueia exclusões New Relic. Revisar o resumo do Plan; não autorizar destruição para contornar erro de state.
-- Bootstrap de bucket no pipeline `autoflow-infra` é um caminho condicionado pelo input `approve_state_bucket_creation`, cujo default atual é `true`; esse default é permissivo e não equivale a uma aprovação humana adicional. Preservar criptografia, versionamento e bloqueio de acesso público. Falhas parciais no bootstrap exigem inspeção e recuperação manual, não recriação ou exclusão automática.
+- Bootstrap de bucket no pipeline `autoflow-infra` é condicionado pelo input `approve_state_bucket_creation`, cujo default é `false`; somente um `workflow_dispatch` com aprovação explícita pode criar o bucket ausente. Pushes não autorizam a criação. A reconciliação de rede tem gate separado, `approve_eks_state_reconciliation`, também `false` por default. Com esse gate, a pipeline pode preparar imports declarativos apenas para os recursos VPC/subnets privadas/route table/associações com correspondência inequívoca. A reconciliação de Access Entry/Policy EKS usa o mesmo gate. A aplicação do Plan continua no Environment protegido por Required reviewers; importar não autoriza Apply. Divergências não suportadas ou ambíguas interrompem o fluxo para reconciliação específica, sem exclusão ou substituição automática. Preservar criptografia, versionamento e bloqueio de acesso público no bucket.
 - A License Key da aplicação e a New Relic User API key são segredos distintos. A License Key de runtime fica no Environment `homolog` do repositório `autoflow`, e é reconciliada com Secrets Manager/Kubernetes; a User API key no `autoflow-infra` permite inventário remoto e provider de recursos de conta.
 
 ## Validação
