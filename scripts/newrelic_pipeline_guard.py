@@ -10,12 +10,15 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
 
 ACCOUNT_ID_PATTERN = re.compile(r"[1-9][0-9]*\Z")
 AWS_ACCOUNT_ID_PATTERN = re.compile(r"[0-9]{12}\Z")
+WORKLOAD_READY_TIMEOUT_SECONDS = 300
+WORKLOAD_POLL_INTERVAL_SECONDS = 10
 FINGERPRINT_INPUTS = (
     "AWS_EXPECTED_ACCOUNT_ID",
     "AWS_REGION",
@@ -192,45 +195,70 @@ def verify_kubernetes_secret(environment: dict[str, str]) -> None:
 
 def verify_application_workloads() -> None:
     """Garante que a observabilidade não seja aplicada antes do deploy da aplicação."""
-    try:
-        deployments = subprocess.run(
-            ["kubectl", "get", "deployments", "autoflow-backend", "autoflow-frontend",
-             "--namespace", "default", "--output", "json"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        services = subprocess.run(
-            ["kubectl", "get", "services", "autoflow-backend-internal", "autoflow-frontend-internal",
-             "--namespace", "default", "--output", "json"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except OSError as error:
-        raise ConfigurationError("Não foi possível verificar os workloads Kubernetes do AutoFlow.") from error
-    if deployments.returncode or services.returncode:
-        raise ConfigurationError("Deployments ou Services do AutoFlow ausentes/inacessíveis; New Relic bloqueado.")
-    try:
-        deployment_items = json.loads(deployments.stdout).get("items", [])
-        service_items = json.loads(services.stdout).get("items", [])
-        deployment_names = {item["metadata"]["name"] for item in deployment_items}
-        service_names = {item["metadata"]["name"] for item in service_items}
-        ready = all(
-            isinstance(item.get("spec", {}).get("replicas"), int)
-            and item["spec"]["replicas"] > 0
-            and item.get("status", {}).get("readyReplicas", 0) >= item["spec"]["replicas"]
-            for item in deployment_items
-        )
-    except (AttributeError, KeyError, TypeError, json.JSONDecodeError) as error:
-        raise ConfigurationError("Resposta Kubernetes inválida ao verificar workloads do AutoFlow.") from error
-    if (
-        deployment_names != {"autoflow-backend", "autoflow-frontend"}
-        or service_names != {"autoflow-backend-internal", "autoflow-frontend-internal"}
-        or len(deployment_items) != 2
-        or not ready
-    ):
-        raise ConfigurationError("Deployments ou Services do AutoFlow não estão prontos; New Relic bloqueado.")
+    def get_resource(kind: str, name: str) -> dict[str, Any]:
+        try:
+            result = subprocess.run(
+                ["kubectl", "get", kind, name, "--namespace", "default", "--output", "json"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as error:
+            raise ConfigurationError(
+                f"Não foi possível verificar {kind[:-1].title()} {name} no namespace default."
+            ) from error
+        resource_kind = kind[:-1].title()
+        if result.returncode:
+            raise ConfigurationError(
+                f"{resource_kind} {name} ausente ou inacessível no namespace default; New Relic bloqueado."
+            )
+        try:
+            item = json.loads(result.stdout)
+            metadata = item["metadata"]
+            if metadata.get("name") != name or metadata.get("namespace") != "default":
+                raise ConfigurationError(
+                    f"{resource_kind} {name} não corresponde ao recurso esperado no namespace default."
+                )
+            return item
+        except (AttributeError, KeyError, TypeError, json.JSONDecodeError) as error:
+            raise ConfigurationError(
+                f"Resposta Kubernetes inválida para {resource_kind} {name} no namespace default."
+            ) from error
+
+    for service_name in ("autoflow-backend-internal", "autoflow-frontend-internal"):
+        get_resource("services", service_name)
+
+    deployment_names = ("autoflow-backend", "autoflow-frontend")
+    deadline = time.monotonic() + WORKLOAD_READY_TIMEOUT_SECONDS
+    while True:
+        statuses = []
+        for name in deployment_names:
+            item = get_resource("deployments", name)
+            try:
+                desired = item.get("spec", {}).get("replicas")
+                available = item.get("status", {}).get("availableReplicas", 0)
+                ready = item.get("status", {}).get("readyReplicas", 0)
+                if any(type(count) is not int or count < 0 for count in (desired, available, ready)):
+                    raise TypeError("réplicas inválidas")
+            except (AttributeError, TypeError) as error:
+                raise ConfigurationError(
+                    f"Estado inválido de Deployment {name} no namespace default."
+                ) from error
+            statuses.append((name, desired, available, ready))
+
+        not_ready = [status for status in statuses if status[1] == 0 or status[3] < status[1]]
+        if not not_ready:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            details = "; ".join(
+                f"Deployment {name}: desired={desired}, available={available}, ready={ready}"
+                for name, desired, available, ready in not_ready
+            )
+            raise ConfigurationError(
+                f"Tempo limite aguardando Deployments prontos no namespace default: {details}; New Relic bloqueado."
+            )
+        time.sleep(min(WORKLOAD_POLL_INTERVAL_SECONDS, remaining))
 
 
 def config_fingerprint(environment: dict[str, str]) -> str:
