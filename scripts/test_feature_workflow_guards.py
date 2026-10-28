@@ -17,17 +17,28 @@ class FeatureWorkflowGuardTests(unittest.TestCase):
 
     def test_eks_network_reconciliation_variable_is_scoped_and_defaults_closed(self):
         workflow = (ROOT / ".github/workflows/pipeline.yml").read_text(encoding="utf-8")
+        plan = workflow.split("  plan:", 1)[1].split("  apply:", 1)[0]
+        apply_job = workflow.split("\n  apply:\n", 1)[1]
         network = workflow.split("      - name: Preparar imports declarativos da rede EKS", 1)[1]
         network = network.split("      - name:", 1)[0]
         access = workflow.split("      - name: Preparar imports declarativos de acesso EKS", 1)[1]
         access = access.split("      - name:", 1)[0]
+        apply_imports = apply_job.split("      - name: Preparar imports declarativos usados pelo plan aprovado", 1)[1]
+        apply_imports = apply_imports.split("      - name:", 1)[0]
 
-        self.assertIn("github.ref == 'refs/heads/develop' && vars.ALLOW_EKS_STATE_RECONCILIATION == 'true'", network)
-        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.approve_eks_state_reconciliation", network)
-        self.assertIn("|| 'false'", network)
+        resolution = "${{ github.ref == 'refs/heads/develop' && vars.ALLOW_EKS_STATE_RECONCILIATION == 'true' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.approve_eks_state_reconciliation && 'true' || 'false') }}"
+        self.assertIn(f"ALLOW_EKS_STATE_RECONCILIATION: {resolution}", plan)
+        self.assertIn(f"ALLOW_EKS_STATE_RECONCILIATION: {resolution}", apply_job)
+        self.assertNotIn("vars.ALLOW_EKS_STATE_RECONCILIATION", network)
+        self.assertNotIn("        env:\n          ALLOW_EKS_STATE_RECONCILIATION:", network)
         self.assertIn("--allow-reconciliation \"$ALLOW_EKS_STATE_RECONCILIATION\"", network)
-        self.assertIn("--allow-imports \"$ALLOW_EKS_STATE_RECONCILIATION\"", access)
+        access_approval = '${{ github.event_name == \'workflow_dispatch\' && inputs.approve_eks_state_reconciliation && \'true\' || \'false\' }}'
+        self.assertIn(f'--allow-imports "{access_approval}"', access)
         self.assertNotIn("vars.ALLOW_EKS_STATE_RECONCILIATION", access)
+        for output in ("infra/eks-network-imports.auto.tf", "infra/eks-access-imports.auto.tf"):
+            self.assertIn(output, plan)
+            self.assertIn(output, apply_imports)
+        self.assertIn(f'--allow-imports "{access_approval}"', apply_imports)
 
     def test_eks_feature_branches_run_validation_without_plan_or_apply(self):
         workflow = (ROOT / ".github/workflows/pipeline.yml").read_text(encoding="utf-8")
