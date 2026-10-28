@@ -110,6 +110,35 @@ class NewRelicPipelineGuardTests(unittest.TestCase):
         with self.assertRaisesRegex(ConfigurationError, "ainda habilitados"):
             check_plan(plan, self.environment)
 
+    def test_import_update_and_create_actions_are_allowed_for_approved_reconciliation_plan(self):
+        self.environment.update({
+            "TF_VAR_enable_newrelic_account_resources": "true",
+            "TF_VAR_newrelic_account_id": "123456",
+            "TF_VAR_newrelic_region": "US",
+            "TF_VAR_newrelic_api_key": "redacted-test-key",
+        })
+        plan = {
+            "resource_changes": [
+                {
+                    "address": "newrelic_one_dashboard.autoflow[0]",
+                    "type": "newrelic_one_dashboard",
+                    "change": {"actions": ["no-op"], "importing": {"id": "dashboard-guid"}},
+                },
+                {
+                    "address": "newrelic_nrql_alert_condition.api_error_rate[0]",
+                    "type": "newrelic_nrql_alert_condition",
+                    "change": {"actions": ["update"]},
+                },
+                {
+                    "address": "newrelic_nrql_alert_condition.api_latency_p95[0]",
+                    "type": "newrelic_nrql_alert_condition",
+                    "change": {"actions": ["create"]},
+                },
+            ]
+        }
+
+        check_plan(plan, self.environment)
+
     def test_non_newrelic_deletes_are_ignored_by_new_relic_guard(self):
         plan = {
             "resource_changes": [
@@ -337,8 +366,9 @@ class NewRelicPipelineGuardTests(unittest.TestCase):
                 self.assertLess(credentials_position, authorization_position)
                 authorization = section.split("- name: Autorizar temporariamente o runner no endpoint EKS", 1)[1]
                 self.assertIn("id: authorize_eks", authorization.split("- name:", 1)[0])
-                cleanup = section.split("- name: Remover autorização temporária do endpoint EKS", 1)[1]
-                self.assertIn("if: always() && steps.authorize_eks.outcome != 'skipped'", cleanup)
+                cleanup = section.split("- name: Limpar artefatos temporários e autorização do endpoint EKS", 1)[1]
+                self.assertIn("if: always()", cleanup)
+                self.assertIn('"${{ steps.authorize_eks.outcome }}" != skipped', cleanup)
                 self.assertIn("python scripts/eks_endpoint_access.py cleanup", cleanup)
 
     def test_plan_infra_state_key_is_available_to_pre_credential_validation(self):

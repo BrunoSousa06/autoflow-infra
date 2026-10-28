@@ -9,6 +9,11 @@ on:
         description: Aplicar o plan de New Relic aprovado neste run
         type: boolean
         default: false
+      approve_reconciliation:
+        description: Aprovar import declarativo ou plano de recuperação de ownership New Relic divergente
+        type: boolean
+        required: true
+        default: false
       allow_destructive:
         description: Autorizar desativação após inspeção e aprovação explícita
         type: boolean
@@ -63,6 +68,7 @@ jobs:
       TF_VAR_newrelic_api_gateway_dashboard_queries: ${{ vars.NEW_RELIC_API_GATEWAY_DASHBOARD_QUERIES_JSON || '[]' }}
       PLAN_ENCRYPTION_PASSPHRASE: ${{ secrets.TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE }}
       NEWRELIC_DEACTIVATION_APPROVED: ${{ github.event_name == 'workflow_dispatch' && inputs.apply && inputs.allow_destructive && 'true' || 'false' }}
+      NEWRELIC_RECONCILIATION_APPROVED: ${{ github.event_name == 'workflow_dispatch' && inputs.approve_reconciliation && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -177,24 +183,36 @@ jobs:
         id: helm_inventory
         run: |
           set -euo pipefail
-          helm list --all-namespaces --output json > "$RUNNER_TEMP/helm-list.json"
-          if python -c 'import json,sys; sys.exit(0 if any(x.get("name")=="newrelic-kubernetes" for x in json.load(open(sys.argv[1]))) else 1)' "$RUNNER_TEMP/helm-list.json"; then
+          helm list --all-namespaces --output json > "$RUNNER_TEMP/helm-inventory.json"
+          chmod 600 "$RUNNER_TEMP/helm-inventory.json"
+          if python -c 'import json,sys; sys.exit(0 if any(x.get("name")=="newrelic-kubernetes" for x in json.load(open(sys.argv[1]))) else 1)' "$RUNNER_TEMP/helm-inventory.json"; then
             echo "present" > "$RUNNER_TEMP/helm-presence"
           else
             echo "absent" > "$RUNNER_TEMP/helm-presence"
           fi
-          rm -f "$RUNNER_TEMP/helm-list.json"
       - name: Confirmar ausência de recursos remotos New Relic
-        run: python scripts/newrelic_remote_guard.py > "$RUNNER_TEMP/newrelic-account-presence"
-      - name: Impedir overlap entre states e recursos remotos
+        run: python scripts/newrelic_remote_guard.py --output "$RUNNER_TEMP/newrelic-account-inventory.json" > "$RUNNER_TEMP/newrelic-account-presence"
+      - name: Validar ownership e preparar reconciliação declarativa
         run: |
           set -euo pipefail
+          chmod 600 "$RUNNER_TEMP/newrelic-account-presence" "$RUNNER_TEMP/newrelic-account-inventory.json"
           python scripts/newrelic_state_guard.py \
             --old-state "$RUNNER_TEMP/legacy-state.json" \
             --new-state "$RUNNER_TEMP/newrelic-state.json" \
             --remote-helm "$(cat "$RUNNER_TEMP/helm-presence")" \
-            --remote-account "$(cat "$RUNNER_TEMP/newrelic-account-presence")"
-          rm -f "$RUNNER_TEMP/legacy-state.json" "$RUNNER_TEMP/newrelic-state.json" "$RUNNER_TEMP/newrelic-account-presence" "$RUNNER_TEMP/helm-presence"
+            --remote-account "$(cat "$RUNNER_TEMP/newrelic-account-presence")" \
+            --allow-reconciliation "$NEWRELIC_RECONCILIATION_APPROVED"
+          python scripts/newrelic_reconcile.py \
+            --state "$RUNNER_TEMP/newrelic-state.json" \
+            --inventory "$RUNNER_TEMP/newrelic-account-inventory.json" \
+            --account-id "$TF_VAR_newrelic_account_id" \
+            --environment "$TF_VAR_newrelic_environment" \
+            --remote-helm "$(cat "$RUNNER_TEMP/helm-presence")" \
+            --helm-inventory "$RUNNER_TEMP/helm-inventory.json" \
+            --approve "$NEWRELIC_RECONCILIATION_APPROVED" \
+            --imports-output infra/newrelic/newrelic-reconciliation.auto.tf \
+            --summary-output "$RUNNER_TEMP/newrelic-reconciliation-summary.json" \
+            --fingerprint-output infra/newrelic/newrelic-reconciliation.sha256
       - name: Fingerprint de configuração não secreta
         working-directory: infra/newrelic
         run: python ../../scripts/newrelic_pipeline_guard.py fingerprint newrelic-inputs.sha256
@@ -208,7 +226,7 @@ jobs:
           python ../../scripts/review_eks_plan.py newrelic-plan.json --allow-destructive "${{ inputs.allow_destructive || 'false' }}"
           printf '%s' "$GITHUB_SHA" > newrelic.tfplan.commit
           gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$PLAN_ENCRYPTION_PASSPHRASE" --output newrelic.tfplan.gpg newrelic.tfplan
-          sha256sum newrelic.tfplan.gpg newrelic.tfplan.commit newrelic-inputs.sha256 > newrelic.tfplan.sha256
+          sha256sum newrelic.tfplan.gpg newrelic.tfplan.commit newrelic-inputs.sha256 newrelic-reconciliation.sha256 > newrelic.tfplan.sha256
           rm -f newrelic.tfplan newrelic-plan.json
       - uses: actions/upload-artifact@v4
         if: success()
@@ -219,14 +237,17 @@ jobs:
             infra/newrelic/newrelic.tfplan.commit
             infra/newrelic/newrelic.tfplan.sha256
             infra/newrelic/newrelic-inputs.sha256
+            infra/newrelic/newrelic-reconciliation.sha256
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
-      - name: Remover autorização temporária do endpoint EKS
-        if: always() && steps.authorize_eks.outcome != 'skipped'
+      - name: Limpar artefatos temporários e autorização do endpoint EKS
+        if: always()
         run: |
-          python scripts/eks_endpoint_access.py cleanup --region "$AWS_REGION" --cluster "$EKS_CLUSTER_NAME"
-          rm -f "$RUNNER_TEMP/legacy-state.json" "$RUNNER_TEMP/newrelic-state.json" "$RUNNER_TEMP/newrelic-account-presence" "$RUNNER_TEMP/helm-presence" "$RUNNER_TEMP/newrelic-head-error" "$RUNNER_TEMP/helm-list.json"
+          if [ "${{ steps.authorize_eks.outcome }}" != skipped ]; then
+            python scripts/eks_endpoint_access.py cleanup --region "$AWS_REGION" --cluster "$EKS_CLUSTER_NAME"
+          fi
+          rm -f "$RUNNER_TEMP/legacy-state.json" "$RUNNER_TEMP/newrelic-state.json" "$RUNNER_TEMP/newrelic-account-presence" "$RUNNER_TEMP/newrelic-account-inventory.json" "$RUNNER_TEMP/newrelic-reconciliation-summary.json" "$RUNNER_TEMP/helm-presence" "$RUNNER_TEMP/helm-inventory.json" "$RUNNER_TEMP/newrelic-head-error" infra/newrelic/newrelic-reconciliation.auto.tf infra/newrelic/newrelic-reconciliation.sha256
 
   apply:
     if: (github.ref == 'refs/heads/develop' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.apply))) || (github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.apply)
@@ -253,6 +274,7 @@ jobs:
       TF_VAR_newrelic_synthetic_url: ${{ vars.NEW_RELIC_SYNTHETIC_URL }}
       TF_VAR_newrelic_synthetic_locations: ${{ vars.NEW_RELIC_SYNTHETIC_LOCATIONS_JSON || '[]' }}
       TF_VAR_newrelic_api_gateway_dashboard_queries: ${{ vars.NEW_RELIC_API_GATEWAY_DASHBOARD_QUERIES_JSON || '[]' }}
+      NEWRELIC_RECONCILIATION_APPROVED: ${{ github.event_name == 'workflow_dispatch' && inputs.approve_reconciliation && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -336,14 +358,14 @@ jobs:
           if [ "$TF_VAR_enable_newrelic_kubernetes" = true ]; then
             python scripts/newrelic_pipeline_guard.py verify-secret
           fi
-          python scripts/newrelic_remote_guard.py > "$RUNNER_TEMP/newrelic-account-presence"
-          helm list --all-namespaces --output json > "$RUNNER_TEMP/helm-list.json"
-          if python -c 'import json,sys; sys.exit(0 if any(x.get("name")=="newrelic-kubernetes" for x in json.load(open(sys.argv[1]))) else 1)' "$RUNNER_TEMP/helm-list.json"; then
+          python scripts/newrelic_remote_guard.py --output "$RUNNER_TEMP/newrelic-account-inventory.json" > "$RUNNER_TEMP/newrelic-account-presence"
+          helm list --all-namespaces --output json > "$RUNNER_TEMP/helm-inventory.json"
+          chmod 600 "$RUNNER_TEMP/newrelic-account-presence" "$RUNNER_TEMP/newrelic-account-inventory.json" "$RUNNER_TEMP/helm-inventory.json"
+          if python -c 'import json,sys; sys.exit(0 if any(x.get("name")=="newrelic-kubernetes" for x in json.load(open(sys.argv[1]))) else 1)' "$RUNNER_TEMP/helm-inventory.json"; then
             echo "present" > "$RUNNER_TEMP/helm-presence"
           else
             echo "absent" > "$RUNNER_TEMP/helm-presence"
           fi
-          rm -f "$RUNNER_TEMP/helm-list.json"
           cd infra
           terraform init -input=false -lockfile=readonly -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$AWS_TF_STATE_KEY_INFRA" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
           terraform state pull > "$RUNNER_TEMP/legacy-state.json"
@@ -358,14 +380,33 @@ jobs:
             exit 1
           fi
           chmod 600 "$RUNNER_TEMP/legacy-state.json" "$RUNNER_TEMP/newrelic-state.json"
-          python ../../scripts/newrelic_state_guard.py --old-state "$RUNNER_TEMP/legacy-state.json" --new-state "$RUNNER_TEMP/newrelic-state.json" --remote-helm "$(cat "$RUNNER_TEMP/helm-presence")" --remote-account "$(cat "$RUNNER_TEMP/newrelic-account-presence")"
+          python ../../scripts/newrelic_state_guard.py \
+            --old-state "$RUNNER_TEMP/legacy-state.json" \
+            --new-state "$RUNNER_TEMP/newrelic-state.json" \
+            --remote-helm "$(cat "$RUNNER_TEMP/helm-presence")" \
+            --remote-account "$(cat "$RUNNER_TEMP/newrelic-account-presence")" \
+            --allow-reconciliation "$NEWRELIC_RECONCILIATION_APPROVED"
+          python ../../scripts/newrelic_reconcile.py \
+            --state "$RUNNER_TEMP/newrelic-state.json" \
+            --inventory "$RUNNER_TEMP/newrelic-account-inventory.json" \
+            --account-id "$TF_VAR_newrelic_account_id" \
+            --environment "$TF_VAR_newrelic_environment" \
+            --remote-helm "$(cat "$RUNNER_TEMP/helm-presence")" \
+            --helm-inventory "$RUNNER_TEMP/helm-inventory.json" \
+            --approve "$NEWRELIC_RECONCILIATION_APPROVED" \
+            --imports-output newrelic-reconciliation.auto.tf \
+            --summary-output "$RUNNER_TEMP/newrelic-reconciliation-summary.json" \
+            --fingerprint-output "$RUNNER_TEMP/newrelic-reconciliation.current.sha256"
+          cmp "$RUNNER_TEMP/newrelic-reconciliation.current.sha256" newrelic-reconciliation.sha256
       - name: Aplicar somente o plan aprovado
         working-directory: infra/newrelic
         run: |
           set -euo pipefail
           terraform apply -input=false newrelic.tfplan
-      - name: Remover autorização temporária do endpoint EKS
-        if: always() && steps.authorize_eks.outcome != 'skipped'
+      - name: Limpar artefatos temporários e autorização do endpoint EKS
+        if: always()
         run: |
-          python scripts/eks_endpoint_access.py cleanup --region "$AWS_REGION" --cluster "$EKS_CLUSTER_NAME"
-          rm -f "$RUNNER_TEMP/legacy-state.json" "$RUNNER_TEMP/newrelic-state.json" "$RUNNER_TEMP/newrelic-account-presence" "$RUNNER_TEMP/helm-presence" "$RUNNER_TEMP/newrelic-head-error" "$RUNNER_TEMP/helm-list.json"
+          if [ "${{ steps.authorize_eks.outcome }}" != skipped ]; then
+            python scripts/eks_endpoint_access.py cleanup --region "$AWS_REGION" --cluster "$EKS_CLUSTER_NAME"
+          fi
+          rm -f "$RUNNER_TEMP/legacy-state.json" "$RUNNER_TEMP/newrelic-state.json" "$RUNNER_TEMP/newrelic-account-presence" "$RUNNER_TEMP/newrelic-account-inventory.json" "$RUNNER_TEMP/newrelic-reconciliation-summary.json" "$RUNNER_TEMP/newrelic-reconciliation.current.sha256" "$RUNNER_TEMP/helm-presence" "$RUNNER_TEMP/helm-inventory.json" "$RUNNER_TEMP/newrelic-head-error" infra/newrelic/newrelic-reconciliation.auto.tf

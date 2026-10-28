@@ -1,6 +1,6 @@
 # Runbook: transferência controlada do state New Relic
 
-Este procedimento cobre somente a transferência de ownership Terraform entre `infra/` e `infra/newrelic/`. Não foi executado contra AWS ou New Relic. Nenhum workflow realiza esses passos automaticamente.
+Este procedimento cobre somente a transferência de ownership Terraform entre `infra/` e `infra/newrelic/`. Não foi executado contra AWS ou New Relic. A reconciliação do workflow `New Relic Pipeline` cobre recursos do mesmo root `infra/newrelic/`; ela não transfere ownership entre roots.
 
 ## Regras de segurança
 
@@ -11,9 +11,21 @@ Este procedimento cobre somente a transferência de ownership Terraform entre `i
 5. Criar backup de cada state com `terraform state pull`, em local criptografado, acesso mínimo e retenção aprovada. Registrar hash, versão e horário sem publicar o conteúdo; confirmar leitura do backup antes de prosseguir.
 6. Garantir que somente um root terá ownership após cada etapa. Plan destrutivo do root antigo permanece bloqueado pelo guard `check-legacy-plan`; não usar `allow_destructive` para contorná-lo.
 
-## Inventário e decisão
+## Inventário e reconciliação no mesmo root
 
-Com backend/key corretos inicializados, executar `terraform state list` separadamente em `infra/` e `infra/newrelic/`, salvando a saída restrita. O script `scripts/newrelic_state_guard.py` testa states JSON sintéticos e bloqueia address legado, duplicação, state novo sem recurso remoto correspondente, recurso remoto sem ownership no state novo e inventário remoto inconclusivo. State novo não vazio é permitido no deploy normal quando o inventário confirma objetos remotos correspondentes. O CI usa state pull em arquivos temporários protegidos; runners descartáveis removem esses conteúdos ao final do job.
+No mesmo root, o workflow coleta state e inventário remoto completo e aplica estas regras:
+
+| State | New Relic | Ação da pipeline |
+|---|---|---|
+| Ausente | Ausente | Permite Plan normal para criação; Apply continua protegido por reviewers do Environment. |
+| Presente, ID correspondente | Presente | Mantém ownership e deixa o Terraform planejar somente drift de configuração. |
+| Ausente | Presente, identidade única e pertencente ao AutoFlow | Exige `workflow_dispatch` com `approve_reconciliation=true`; gera import block temporário e inclui a importação no Plan. O State só muda no Apply do Plan revisado. |
+| Presente | Ausente na listagem remota completa | Exige a mesma aprovação; não remove referências do State. O Terraform Plan faz refresh/read pelo ID armazenado e o reviewer decide se a ação de recuperação (por exemplo, create após confirmar NotFound) é aceitável. |
+| Qualquer | Resposta incompleta, API negada, timeout, paginação/cursor inválido, duplicidade ou identidade ambígua | Bloqueia, sem tratar erro como ausência e sem produzir import. |
+
+Imports suportados usam IDs compostos definidos pelo provider New Relic 3.100.5: GUID para dashboard e Synthetic monitor, `<policy_id>:<account_id>` para policy, `<policy_id>:<condition_id>:<condition_type>` para condição NRQL e `<namespace>/<release>` para Helm release. Os IDs ficam somente no inventário temporário/import blocks do runner e no Plan criptografado; não aparecem nas mensagens do guard. A pipeline confirma que o State e o inventário mantêm as mesmas identidades entre Plan e Apply. `instances: []` no formato de `terraform state pull` não é considerado recurso presente.
+
+O input de reconciliação é falso por padrão e não autoriza `state rm`, importação manual, destroy ou substituição. State legado e ownership simultâneo entre roots continuam exigindo o procedimento separado abaixo. O CI usa state pull em arquivos temporários com permissão restrita; runners descartáveis removem esses conteúdos ao final do job.
 
 Exemplo de inspeção depois de confirmar bucket/key autorizados (os comandos leem state; a saída deve permanecer em diretório restrito):
 
@@ -31,8 +43,8 @@ terraform -chdir=infra/newrelic state pull > "$SECURE_BACKUP_DIR/newrelic-before
 
 - Sem endereço New Relic em nenhum state e objetos remotos comprovadamente ausentes: é cenário A; não há migração.
 - Endereço registrado no root antigo: cenário B; mapear o endereço retornado para o endereço declarado atual e documentar o ID/import ID do recurso, usando documentação do provider para a versão travada.
-- Se houver address no state antigo mas o objeto remoto estiver comprovadamente ausente, não importar; somente com autorização explícita remover a referência órfã e confirmar que o Plan não propõe destroy/criação indevida.
-- Objeto remoto existente sem state no novo root, ou recursos existentes fora do conjunto de nomes esperados: parar e ampliar inventário. A pipeline bloqueia criação automática.
+- Se houver address no state antigo mas o objeto remoto estiver ausente, interromper a transferência entre roots. A reconciliação do root novo não remove referências do root antigo; não executar `state rm` automaticamente.
+- Objeto remoto existente sem state no novo root, ou recursos existentes fora do conjunto de nomes/identidades esperados: parar e ampliar inventário. A reconciliação do mesmo root não adota objetos ambíguos ou fora do conjunto esperado.
 - Endereço em ambos os states: conflito; nenhum Plan/Apply normal pode prosseguir.
 
 ## Transferência autorizada
