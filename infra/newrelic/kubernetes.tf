@@ -25,7 +25,7 @@ resource "helm_release" "newrelic_kubernetes" {
               [FILTER]
                   Name   grep
                   Match  kube.*
-                  Regex  $kubernetes['namespace_name'] ^${var.newrelic_namespace}$
+                  Regex  namespace_name ^${var.newrelic_namespace}$
             FILTER
           }
         }
