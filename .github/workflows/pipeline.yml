@@ -162,7 +162,9 @@ jobs:
           chmod 600 "$RUNNER_TEMP/legacy-infra-state.json"
           python scripts/newrelic_state_guard.py --legacy-only --old-state "$RUNNER_TEMP/legacy-infra-state.json"
           rm -f "$RUNNER_TEMP/legacy-infra-state.json"
-      - name: Preparar imports declarativos da rede EKS com aprovação explícita
+      - name: Preparar imports declarativos da rede EKS
+        env:
+          ALLOW_EKS_STATE_RECONCILIATION: ${{ github.ref == 'refs/heads/develop' && vars.ALLOW_EKS_STATE_RECONCILIATION == 'true' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.approve_eks_state_reconciliation && 'true' || 'false') }}
         run: python scripts/prepare_eks_network_imports.py --expected-account "$AWS_EXPECTED_ACCOUNT_ID" --region "$AWS_REGION" --allow-reconciliation "$ALLOW_EKS_STATE_RECONCILIATION" --output infra/eks-network-imports.auto.tf
       - name: Preparar imports declarativos de acesso EKS
         run: python scripts/prepare_eks_access_imports.py --cluster "$EKS_CLUSTER_NAME" --principal "$OPERATOR_ROLE_ARN" --region "$AWS_REGION" --allow-imports "$ALLOW_EKS_STATE_RECONCILIATION" --output infra/eks-access-imports.auto.tf

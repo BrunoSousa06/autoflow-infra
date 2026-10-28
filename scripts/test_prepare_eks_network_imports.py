@@ -1,3 +1,4 @@
+import subprocess
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -182,6 +183,13 @@ class NetworkImportTests(unittest.TestCase):
             imports.require_approval([("aws_vpc.autoflow_vpc", VPC_ID)], False)
         imports.require_approval([("aws_vpc.autoflow_vpc", VPC_ID)], True)
         imports.require_approval([], False)
+
+    def test_access_denied_inventory_query_blocks_reconciliation(self):
+        def deny(*args, **kwargs):
+            raise subprocess.CalledProcessError(1, args[0], stderr="AccessDenied")
+
+        with self.assertRaisesRegex(imports.NetworkImportError, "inconclusiva"):
+            imports.run_json(["aws", "ec2", "describe-vpcs"], deny)
 
     def test_rendered_import_addresses_keep_count_indices(self):
         text = imports.render_imports([

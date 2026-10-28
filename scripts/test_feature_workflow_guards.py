@@ -15,6 +15,20 @@ class FeatureWorkflowGuardTests(unittest.TestCase):
         self.assertIn("github.event_name == 'workflow_dispatch' && inputs.approve_state_bucket_creation", bootstrap)
         self.assertIn("|| 'false'", bootstrap)
 
+    def test_eks_network_reconciliation_variable_is_scoped_and_defaults_closed(self):
+        workflow = (ROOT / ".github/workflows/pipeline.yml").read_text(encoding="utf-8")
+        network = workflow.split("      - name: Preparar imports declarativos da rede EKS", 1)[1]
+        network = network.split("      - name:", 1)[0]
+        access = workflow.split("      - name: Preparar imports declarativos de acesso EKS", 1)[1]
+        access = access.split("      - name:", 1)[0]
+
+        self.assertIn("github.ref == 'refs/heads/develop' && vars.ALLOW_EKS_STATE_RECONCILIATION == 'true'", network)
+        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.approve_eks_state_reconciliation", network)
+        self.assertIn("|| 'false'", network)
+        self.assertIn("--allow-reconciliation \"$ALLOW_EKS_STATE_RECONCILIATION\"", network)
+        self.assertIn("--allow-imports \"$ALLOW_EKS_STATE_RECONCILIATION\"", access)
+        self.assertNotIn("vars.ALLOW_EKS_STATE_RECONCILIATION", access)
+
     def test_eks_feature_branches_run_validation_without_plan_or_apply(self):
         workflow = (ROOT / ".github/workflows/pipeline.yml").read_text(encoding="utf-8")
         plan = workflow.split("  plan:", 1)[1].split("  apply:", 1)[0]
