@@ -165,7 +165,7 @@ jobs:
       - name: Preparar imports declarativos da rede EKS
         run: python scripts/prepare_eks_network_imports.py --expected-account "$AWS_EXPECTED_ACCOUNT_ID" --region "$AWS_REGION" --allow-reconciliation "$ALLOW_EKS_STATE_RECONCILIATION" --output infra/eks-network-imports.auto.tf
       - name: Preparar imports declarativos de acesso EKS
-        run: python scripts/prepare_eks_access_imports.py --cluster "$EKS_CLUSTER_NAME" --principal "$OPERATOR_ROLE_ARN" --region "$AWS_REGION" --allow-imports "${{ github.event_name == 'workflow_dispatch' && inputs.approve_eks_state_reconciliation && 'true' || 'false' }}" --output infra/eks-access-imports.auto.tf
+        run: python scripts/prepare_eks_access_imports.py --cluster "$EKS_CLUSTER_NAME" --principal "$OPERATOR_ROLE_ARN" --region "$AWS_REGION" --allow-imports "$ALLOW_EKS_STATE_RECONCILIATION" --output infra/eks-access-imports.auto.tf
       - name: Diagnosticar integridade dos providers Terraform
         working-directory: infra
         run: python ../scripts/diagnose_terraform_providers.py
@@ -327,7 +327,7 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/prepare_eks_network_imports.py --expected-account "$AWS_EXPECTED_ACCOUNT_ID" --region "$AWS_REGION" --allow-reconciliation "$ALLOW_EKS_STATE_RECONCILIATION" --output infra/eks-network-imports.auto.tf
-          python scripts/prepare_eks_access_imports.py --cluster "$EKS_CLUSTER_NAME" --principal "$OPERATOR_ROLE_ARN" --region "$AWS_REGION" --allow-imports "${{ github.event_name == 'workflow_dispatch' && inputs.approve_eks_state_reconciliation && 'true' || 'false' }}" --output infra/eks-access-imports.auto.tf
+          python scripts/prepare_eks_access_imports.py --cluster "$EKS_CLUSTER_NAME" --principal "$OPERATOR_ROLE_ARN" --region "$AWS_REGION" --allow-imports "$ALLOW_EKS_STATE_RECONCILIATION" --output infra/eks-access-imports.auto.tf
       - name: Inspecionar plan aprovado e validar guards
         working-directory: infra
         env:
