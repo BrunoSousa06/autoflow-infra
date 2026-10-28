@@ -3,11 +3,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from newrelic_state_guard import StateGuardError, check_legacy_state, check_states
+from newrelic_state_guard import StateGuardError, check_legacy_state, check_states, state_addresses
 
 
 def write_state(path: Path, resources: list[dict]) -> None:
     path.write_text(json.dumps({"version": 4, "values": {"root_module": {"resources": resources}}}), encoding="utf-8")
+
+
+def write_pulled_state(path: Path, resources: list[dict]) -> None:
+    path.write_text(json.dumps({"version": 4, "resources": resources}), encoding="utf-8")
 
 
 class NewRelicStateGuardTests(unittest.TestCase):
@@ -46,8 +50,85 @@ class NewRelicStateGuardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             new = Path(directory) / "new.json"
             write_state(new, [{"address": "newrelic_alert_policy.autoflow[0]", "mode": "managed"}])
-            with self.assertRaisesRegex(StateGuardError, "sem ownership correspondente"):
+            with self.assertRaisesRegex(StateGuardError, "sem ownership"):
                 check_states(None, str(new), "absent", "condition:api_error_rate")
+
+    def test_zero_instance_containers_in_pulled_state_are_not_owned_objects(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "new.json"
+            resource_names = [
+                ("newrelic_nrql_alert_condition", "backend_unavailable"),
+                ("newrelic_nrql_alert_condition", "backend_cpu_utilization"),
+                ("newrelic_nrql_alert_condition", "backend_memory_utilization"),
+                ("newrelic_nrql_alert_condition", "synthetic_failure"),
+                ("newrelic_synthetics_monitor", "autoflow_uptime"),
+            ]
+            write_pulled_state(state, [
+                {"mode": "managed", "type": resource_type, "name": name, "instances": []}
+                for resource_type, name in resource_names
+            ])
+
+            self.assertEqual(state_addresses(str(state)), set())
+            check_states(None, str(state), "absent", "absent")
+
+    def test_partially_applied_objects_match_inventory_while_failed_alerts_remain_pending(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "new.json"
+            populated = [
+                ("newrelic_one_dashboard", "autoflow"),
+                ("newrelic_alert_policy", "autoflow"),
+                ("newrelic_nrql_alert_condition", "order_processing_failure"),
+                ("newrelic_nrql_alert_condition", "integration_failure"),
+            ]
+            empty = [
+                ("newrelic_nrql_alert_condition", "api_error_rate"),
+                ("newrelic_nrql_alert_condition", "api_latency_p95"),
+                ("newrelic_synthetics_monitor", "autoflow_uptime"),
+                ("newrelic_nrql_alert_condition", "synthetic_failure"),
+            ]
+            write_pulled_state(state, [
+                {
+                    "mode": "managed",
+                    "type": resource_type,
+                    "name": name,
+                    "instances": [{"attributes": {"id": "redacted-test-id"}}],
+                }
+                for resource_type, name in populated
+            ] + [
+                {"mode": "managed", "type": resource_type, "name": name, "instances": []}
+                for resource_type, name in empty
+            ])
+
+            check_states(
+                None,
+                str(state),
+                "absent",
+                "dashboard,policy,condition:order_processing_failure,condition:integration_failure",
+            )
+
+    def test_real_state_remote_divergence_names_category_without_exposing_ids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "new.json"
+            write_pulled_state(state, [{
+                "mode": "managed",
+                "type": "newrelic_one_dashboard",
+                "name": "autoflow",
+                "instances": [{"attributes": {"id": "sensitive-remote-id"}}],
+            }])
+
+            with self.assertRaises(StateGuardError) as caught:
+                check_states(None, str(state), "absent", "absent")
+
+            self.assertIn("dashboard", str(caught.exception))
+            self.assertNotIn("sensitive-remote-id", str(caught.exception))
+
+    def test_reconciliation_approval_allows_differences_but_not_unknown_inventory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "new.json"
+            write_state(state, [{"address": "newrelic_one_dashboard.autoflow[0]", "mode": "managed"}])
+            check_states(None, str(state), "absent", "absent", allow_reconciliation=True)
+            with self.assertRaisesRegex(StateGuardError, "inconclusivo"):
+                check_states(None, str(state), "unknown", "absent", allow_reconciliation=True)
 
     def test_same_resource_in_both_states_blocks(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -76,7 +157,7 @@ class NewRelicStateGuardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             new = Path(directory) / "new.json"
             write_state(new, [])
-            with self.assertRaisesRegex(StateGuardError, "Objeto New Relic remoto"):
+            with self.assertRaisesRegex(StateGuardError, "Categorias New Relic remotas"):
                 check_states(None, str(new), "absent", "present")
             with self.assertRaisesRegex(StateGuardError, "inconclusivo"):
                 check_states(None, str(new), "unknown", "absent")
