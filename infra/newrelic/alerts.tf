@@ -63,6 +63,11 @@ resource "newrelic_nrql_alert_condition" "integration_failure" {
   }
 }
 
+# O agent Java recebe NEW_RELIC_LABELS=environment:<ambiente>; tags APM são
+# consultadas em NRQL pelo prefixo tags., não como atributo environment simples.
+# Alertas NRQL não permitem condicionar este agregado ao count(*) >= 20 sem
+# subconsulta; a regra de volume mínimo foi removida e baixo volume pode elevar
+# a taxa observada. O mesmo limite se aplica ao percentil p95 abaixo.
 resource "newrelic_nrql_alert_condition" "api_error_rate" {
   count                        = var.enable_newrelic_account_resources ? 1 : 0
   policy_id                    = newrelic_alert_policy.autoflow[0].id
@@ -77,16 +82,9 @@ resource "newrelic_nrql_alert_condition" "api_error_rate" {
   fill_option                  = "none"
   nrql {
     query = <<-NRQL
-      SELECT 100 * sum(errorCount) / sum(transactionCount)
-      FROM (
-        SELECT filter(count(*), WHERE error IS true) AS errorCount,
-               count(*) AS transactionCount
-        FROM Transaction
-        WHERE appName = 'autoflow-backend' AND environment = '${var.newrelic_environment}'
-        FACET appName
-        TIMESERIES 5 minutes
-      )
-      WHERE transactionCount >= 20
+      SELECT percentage(count(*), WHERE error IS true)
+      FROM Transaction
+      WHERE appName = 'autoflow-backend' AND tags.environment = '${var.newrelic_environment}'
     NRQL
   }
   warning {
@@ -111,16 +109,9 @@ resource "newrelic_nrql_alert_condition" "api_latency_p95" {
   fill_option                  = "none"
   nrql {
     query = <<-NRQL
-      SELECT max(p95Duration)
-      FROM (
-        SELECT percentile(duration, 95) AS p95Duration,
-               count(*) AS transactionCount
-        FROM Transaction
-        WHERE appName = 'autoflow-backend' AND environment = '${var.newrelic_environment}'
-        FACET appName
-        TIMESERIES 5 minutes
-      )
-      WHERE transactionCount >= 20
+      SELECT percentile(duration, 95)
+      FROM Transaction
+      WHERE appName = 'autoflow-backend' AND tags.environment = '${var.newrelic_environment}'
     NRQL
   }
   warning {

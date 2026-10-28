@@ -150,42 +150,117 @@ class NewRelicPipelineGuardTests(unittest.TestCase):
             with self.assertRaisesRegex(ConfigurationError, "Secret New Relic ausente"):
                 verify_kubernetes_secret(self.environment)
 
-    def test_workload_preflight_requires_ready_backend_frontend_and_services(self):
+    def test_workload_preflight_accepts_healthy_deployments_and_services(self):
         from pathlib import Path
 
-        healthy_deployments = {
-            "items": [
-                {"metadata": {"name": name}, "spec": {"replicas": 2}, "status": {"readyReplicas": 2}}
-                for name in ("autoflow-backend", "autoflow-frontend")
-            ]
-        }
-        services = {"items": [
-            {"metadata": {"name": name}}
-            for name in ("autoflow-backend-internal", "autoflow-frontend-internal")
-        ]}
-        results = [
-            SimpleNamespace(returncode=0, stdout=json.dumps(healthy_deployments)),
-            SimpleNamespace(returncode=0, stdout=json.dumps(services)),
-        ]
-        with patch("newrelic_pipeline_guard.subprocess.run", side_effect=results) as run:
-            verify_application_workloads()
-        self.assertEqual(run.call_count, 2)
+        def response(kind, name, *, ready=1, available=1, desired=1, returncode=0):
+            if kind == "services":
+                item = {"metadata": {"name": name, "namespace": "default"}}
+            else:
+                item = {
+                    "metadata": {"name": name, "namespace": "default"},
+                    "spec": {"replicas": desired},
+                    "status": {"readyReplicas": ready, "availableReplicas": available},
+                }
+            return SimpleNamespace(returncode=returncode, stdout=json.dumps(item), stderr="")
 
-        unhealthy = json.loads(json.dumps(healthy_deployments))
-        unhealthy["items"][0]["status"]["readyReplicas"] = 1
-        with patch(
-            "newrelic_pipeline_guard.subprocess.run",
-            side_effect=(
-                SimpleNamespace(returncode=0, stdout=json.dumps(unhealthy)),
-                SimpleNamespace(returncode=0, stdout=json.dumps(services)),
-            ),
-        ):
-            with self.assertRaisesRegex(ConfigurationError, "não estão prontos"):
-                verify_application_workloads()
+        resources = {
+            ("services", "autoflow-backend-internal"): response("services", "autoflow-backend-internal"),
+            ("services", "autoflow-frontend-internal"): response("services", "autoflow-frontend-internal"),
+            ("deployments", "autoflow-backend"): response("deployments", "autoflow-backend", desired=2, ready=2, available=2),
+            ("deployments", "autoflow-frontend"): response("deployments", "autoflow-frontend", desired=1, ready=1, available=1),
+        }
+
+        def run(command, **_kwargs):
+            return resources[(command[2], command[3])]
+
+        with patch("newrelic_pipeline_guard.subprocess.run", side_effect=run) as mocked:
+            verify_application_workloads()
+        self.assertEqual(mocked.call_count, 4)
 
         workflow = Path(__file__).parents[1] / ".github/workflows/newrelic.yml"
         content = workflow.read_text(encoding="utf-8")
         self.assertEqual(content.count("python scripts/newrelic_pipeline_guard.py verify-workloads"), 2)
+
+    @patch("newrelic_pipeline_guard.time.sleep")
+    def test_workload_preflight_waits_for_transient_deployment_rollout(self, sleep):
+        results = {}
+        backend_reads = 0
+        for service_name in ("autoflow-backend-internal", "autoflow-frontend-internal"):
+            results[("services", service_name)] = SimpleNamespace(
+                returncode=0, stdout=json.dumps({"metadata": {"name": service_name, "namespace": "default"}}), stderr=""
+            )
+        results[("deployments", "autoflow-frontend")] = SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"metadata": {"name": "autoflow-frontend", "namespace": "default"},
+                               "spec": {"replicas": 1}, "status": {"readyReplicas": 1, "availableReplicas": 1}}),
+            stderr="",
+        )
+
+        def run(command, **_kwargs):
+            nonlocal backend_reads
+            kind, name = command[2], command[3]
+            if (kind, name) == ("deployments", "autoflow-backend"):
+                backend_reads += 1
+                ready = 0 if backend_reads == 1 else 1
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=json.dumps({"metadata": {"name": name, "namespace": "default"},
+                                       "spec": {"replicas": 1},
+                                       "status": {"readyReplicas": ready, "availableReplicas": ready}}),
+                    stderr="",
+                )
+            return results[(kind, name)]
+
+        with patch("newrelic_pipeline_guard.subprocess.run", side_effect=run), patch(
+            "newrelic_pipeline_guard.time.monotonic", side_effect=(0, 0)
+        ):
+            verify_application_workloads()
+        sleep.assert_called_once()
+
+    def test_workload_preflight_times_out_with_safe_deployment_counts(self):
+        clock = [0]
+
+        def run(command, **_kwargs):
+            kind, name = command[2], command[3]
+            if kind == "services":
+                item = {"metadata": {"name": name, "namespace": "default"}}
+            else:
+                ready = 0
+                available = 0
+                desired = 2 if name == "autoflow-backend" else 1
+                item = {"metadata": {"name": name, "namespace": "default"},
+                        "spec": {"replicas": desired},
+                        "status": {"readyReplicas": ready, "availableReplicas": available}}
+            return SimpleNamespace(returncode=0, stdout=json.dumps(item), stderr="")
+
+        def sleep(seconds):
+            clock[0] += seconds
+
+        with patch("newrelic_pipeline_guard.subprocess.run", side_effect=run), patch(
+            "newrelic_pipeline_guard.WORKLOAD_READY_TIMEOUT_SECONDS", 10
+        ), patch("newrelic_pipeline_guard.WORKLOAD_POLL_INTERVAL_SECONDS", 5), patch(
+            "newrelic_pipeline_guard.time.monotonic", side_effect=lambda: clock[0]
+        ), patch("newrelic_pipeline_guard.time.sleep", side_effect=sleep):
+            with self.assertRaisesRegex(
+                ConfigurationError,
+                r"Deployment autoflow-backend: desired=2, available=0, ready=0.*Deployment autoflow-frontend: desired=1, available=0, ready=0",
+            ):
+                verify_application_workloads()
+
+    def test_workload_preflight_names_missing_service(self):
+        def run(command, **_kwargs):
+            kind, name = command[2], command[3]
+            if kind == "services" and name == "autoflow-frontend-internal":
+                return SimpleNamespace(returncode=1, stdout="", stderr="NotFound")
+            item = {"metadata": {"name": name, "namespace": "default"}}
+            if kind == "deployments":
+                item.update({"spec": {"replicas": 1}, "status": {"readyReplicas": 1, "availableReplicas": 1}})
+            return SimpleNamespace(returncode=0, stdout=json.dumps(item), stderr="")
+
+        with patch("newrelic_pipeline_guard.subprocess.run", side_effect=run):
+            with self.assertRaisesRegex(ConfigurationError, "Service autoflow-frontend-internal ausente ou inacessível"):
+                verify_application_workloads()
 
     def test_fingerprint_changes_when_flags_or_environment_config_changes(self):
         original = config_fingerprint(self.environment)
