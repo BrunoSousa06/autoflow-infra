@@ -6,6 +6,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FeatureWorkflowGuardTests(unittest.TestCase):
+    def test_state_bucket_bootstrap_variable_is_limited_to_develop_and_defaults_closed(self):
+        workflow = (ROOT / ".github/workflows/pipeline.yml").read_text(encoding="utf-8")
+        bootstrap = workflow.split("      - name: Verificar/bootstrap seguro do bucket de Terraform State", 1)[1]
+        bootstrap = bootstrap.split("      - name:", 1)[0]
+
+        self.assertIn("github.ref == 'refs/heads/develop' && vars.APPROVE_CREATE == 'true'", bootstrap)
+        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.approve_state_bucket_creation", bootstrap)
+        self.assertIn("|| 'false'", bootstrap)
+
     def test_eks_feature_branches_run_validation_without_plan_or_apply(self):
         workflow = (ROOT / ".github/workflows/pipeline.yml").read_text(encoding="utf-8")
         plan = workflow.split("  plan:", 1)[1].split("  apply:", 1)[0]
