@@ -229,7 +229,7 @@ jobs:
           rm -f "$RUNNER_TEMP/legacy-state.json" "$RUNNER_TEMP/newrelic-state.json" "$RUNNER_TEMP/newrelic-account-presence" "$RUNNER_TEMP/helm-presence" "$RUNNER_TEMP/newrelic-head-error" "$RUNNER_TEMP/helm-list.json"
 
   apply:
-    if: github.ref == 'refs/heads/develop' && github.event_name == 'workflow_dispatch' && inputs.apply || github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.apply
+    if: (github.ref == 'refs/heads/develop' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.apply))) || (github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.apply)
     needs: plan
     runs-on: ubuntu-latest
     environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
