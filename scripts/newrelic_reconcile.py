@@ -16,6 +16,7 @@ from newrelic_state_guard import (
     _address_matches,
     state_addresses,
     state_category_ids,
+    state_helm_attributes,
 )
 
 
@@ -90,7 +91,15 @@ def _read_helm_inventory(path: str | None, expected_namespace: str, remote_helm:
     if len(matching) != 1:
         raise ReconciliationError("Release Helm New Relic ausente ou ambíguo; reconciliação bloqueada.")
     release = matching[0]
-    if release.get("namespace") != expected_namespace or not str(release.get("chart", "")).startswith("nri-bundle-"):
+    remote_namespace = release.get("namespace")
+    if (
+        not isinstance(expected_namespace, str)
+        or not expected_namespace.strip()
+        or not isinstance(remote_namespace, str)
+        or not remote_namespace.strip()
+        or remote_namespace != expected_namespace
+        or not str(release.get("chart", "")).startswith("nri-bundle-")
+    ):
         raise ReconciliationError("Release Helm encontrado não corresponde ao namespace/chart AutoFlow; importação bloqueada.")
     if release.get("status") != "deployed":
         raise ReconciliationError("Release Helm não está em estado deployed; reconciliação bloqueada.")
@@ -99,6 +108,7 @@ def _read_helm_inventory(path: str | None, expected_namespace: str, remote_helm:
         "resource_type": HELM_RESOURCE[0],
         "resource_name": HELM_RESOURCE[1],
         "remote_name": "newrelic-kubernetes",
+        "remote_namespace": remote_namespace,
         "import_id": f"{expected_namespace}/newrelic-kubernetes",
     }
 
@@ -256,6 +266,30 @@ def reconcile(
 
     common = state_categories & remote_categories
     for category in sorted(common):
+        if category == HELM_CATEGORY:
+            attributes = state_helm_attributes(state_path)
+            if len(attributes) != 1:
+                raise ReconciliationError(
+                    "State não permite provar a identidade única da categoria helm; reconciliação bloqueada."
+                )
+            state_name = attributes[0].get("name")
+            state_namespace = attributes[0].get("namespace")
+            remote = grouped[category][0]
+            if (
+                not isinstance(state_name, str)
+                or not state_name.strip()
+                or not isinstance(state_namespace, str)
+                or not state_namespace.strip()
+            ):
+                raise ReconciliationError(
+                    "Atributos de name/namespace ausentes no State da categoria helm; reconciliação bloqueada."
+                )
+            if state_name != remote["remote_name"] or state_namespace != remote["remote_namespace"]:
+                raise ReconciliationError(
+                    f"Identidade no State diverge do objeto remoto da categoria {category}; "
+                    "possível substituição externa, revisão manual obrigatória."
+                )
+            continue
         identifiers = state_ids.get(category, set())
         if len(identifiers) != 1:
             raise ReconciliationError(

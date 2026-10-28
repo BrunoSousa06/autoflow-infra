@@ -32,6 +32,35 @@ def write_state(path: Path, objects: list[tuple[str, str, str]]) -> None:
     }), encoding="utf-8")
 
 
+def write_helm_state(path: Path, instances: list[dict], *, show_json: bool = False) -> None:
+    if show_json:
+        resources = [
+            {
+                "address": f"helm_release.newrelic_kubernetes[{index}]",
+                "mode": "managed",
+                "type": "helm_release",
+                "name": "newrelic_kubernetes",
+                "values": attributes,
+            }
+            for index, attributes in enumerate(instances)
+        ]
+        payload = {"format_version": "1.0", "values": {"root_module": {"resources": resources}}}
+    else:
+        payload = {
+            "version": 4,
+            "resources": [{
+                "mode": "managed",
+                "type": "helm_release",
+                "name": "newrelic_kubernetes",
+                "instances": [
+                    {"index_key": index, "attributes": attributes}
+                    for index, attributes in enumerate(instances)
+                ],
+            }],
+        }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
 def resource(category: str, resource_type: str, resource_name: str, import_id: str) -> dict[str, str]:
     names = {
         "dashboard": "AutoFlow Observability",
@@ -284,6 +313,158 @@ class NewRelicReconciliationTests(unittest.TestCase):
             self.assertIn("to = helm_release.newrelic_kubernetes[0]", imports)
             self.assertIn('id = "default/newrelic-kubernetes"', imports)
             self.assertEqual(summary["import_categories"], ["helm"])
+
+    def test_helm_state_name_and_namespace_match_remote_in_state_pull_format(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state.json"
+            write_helm_state(state, [{"id": "newrelic-kubernetes", "name": "newrelic-kubernetes", "namespace": "default"}])
+            helm_file = Path(directory) / "helm.json"
+            helm_file.write_text(json.dumps([{
+                "name": "newrelic-kubernetes",
+                "namespace": "default",
+                "chart": "nri-bundle-8.0.32",
+                "status": "deployed",
+            }]), encoding="utf-8")
+            environment = {**BASE_ENV, "TF_VAR_enable_newrelic_kubernetes": "true"}
+
+            imports, summary, _ = self._reconcile(
+                state, inventory([]), environment=environment,
+                helm_inventory=helm_file, remote_helm="present",
+            )
+
+            self.assertEqual(imports, "")
+            self.assertEqual(summary["import_categories"], [])
+
+    def test_helm_state_show_json_format_matches_by_name_and_namespace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state.json"
+            write_helm_state(state, [{
+                "id": "newrelic-kubernetes",
+                "name": "newrelic-kubernetes",
+                "namespace": "default",
+            }], show_json=True)
+            helm_file = Path(directory) / "helm.json"
+            helm_file.write_text(json.dumps([{
+                "name": "newrelic-kubernetes",
+                "namespace": "default",
+                "chart": "nri-bundle-8.0.32",
+                "status": "deployed",
+            }]), encoding="utf-8")
+
+            imports, _, _ = self._reconcile(
+                state, inventory([]),
+                environment={**BASE_ENV, "TF_VAR_enable_newrelic_kubernetes": "true"},
+                helm_inventory=helm_file, remote_helm="present",
+            )
+
+            self.assertEqual(imports, "")
+
+    def test_helm_namespace_divergence_blocks_reconciliation(self):
+        self._assert_helm_identity_divergence(
+            {"id": "newrelic-kubernetes", "name": "newrelic-kubernetes", "namespace": "other"}
+        )
+
+    def test_helm_name_divergence_blocks_reconciliation(self):
+        self._assert_helm_identity_divergence(
+            {"id": "newrelic-kubernetes", "name": "replacement", "namespace": "default"}
+        )
+
+    def _assert_helm_identity_divergence(self, attributes):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state.json"
+            write_helm_state(state, [attributes])
+            helm_file = Path(directory) / "helm.json"
+            helm_file.write_text(json.dumps([{
+                "name": "newrelic-kubernetes",
+                "namespace": "default",
+                "chart": "nri-bundle-8.0.32",
+                "status": "deployed",
+            }]), encoding="utf-8")
+
+            with self.assertRaisesRegex(ReconciliationError, "Identidade no State diverge.*helm"):
+                self._reconcile(
+                    state, inventory([]),
+                    environment={**BASE_ENV, "TF_VAR_enable_newrelic_kubernetes": "true"},
+                    helm_inventory=helm_file, remote_helm="present",
+                )
+
+    def test_helm_release_missing_remotely_remains_controlled_recovery(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state.json"
+            write_helm_state(state, [{
+                "id": "newrelic-kubernetes",
+                "name": "newrelic-kubernetes",
+                "namespace": "default",
+            }])
+
+            with self.assertRaisesRegex(ReconciliationError, "aprovação explícita.*helm"):
+                self._reconcile(
+                    state, inventory([]),
+                    environment={**BASE_ENV, "TF_VAR_enable_newrelic_kubernetes": "true"},
+                    remote_helm="absent",
+                )
+
+            _, summary, _ = self._reconcile(
+                state, inventory([]), approve=True,
+                environment={**BASE_ENV, "TF_VAR_enable_newrelic_kubernetes": "true"},
+                remote_helm="absent",
+            )
+            self.assertEqual(summary["recovery_categories"], ["helm"])
+
+    def test_two_helm_state_instances_block_reconciliation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state.json"
+            attributes = {"id": "newrelic-kubernetes", "name": "newrelic-kubernetes", "namespace": "default"}
+            write_helm_state(state, [attributes, attributes])
+
+            with self.assertRaisesRegex(ReconciliationError, "múltiplas instâncias.*Helm"):
+                self._reconcile(
+                    state, inventory([]),
+                    environment={**BASE_ENV, "TF_VAR_enable_newrelic_kubernetes": "true"},
+                    remote_helm="absent",
+                )
+
+    def test_incomplete_helm_state_attributes_block_even_when_id_matches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state.json"
+            write_helm_state(state, [{"id": "newrelic-kubernetes", "name": "newrelic-kubernetes"}])
+            helm_file = Path(directory) / "helm.json"
+            helm_file.write_text(json.dumps([{
+                "name": "newrelic-kubernetes",
+                "namespace": "default",
+                "chart": "nri-bundle-8.0.32",
+                "status": "deployed",
+            }]), encoding="utf-8")
+
+            with self.assertRaisesRegex(ReconciliationError, "Atributos de name/namespace ausentes.*helm"):
+                self._reconcile(
+                    state, inventory([]),
+                    environment={**BASE_ENV, "TF_VAR_enable_newrelic_kubernetes": "true"},
+                    helm_inventory=helm_file, remote_helm="present",
+                )
+
+    def test_helm_reconciliation_is_idempotent_without_state_or_inventory_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state.json"
+            write_helm_state(state, [{
+                "id": "newrelic-kubernetes",
+                "name": "newrelic-kubernetes",
+                "namespace": "default",
+            }])
+            helm_file = Path(directory) / "helm.json"
+            helm_file.write_text(json.dumps([{
+                "name": "newrelic-kubernetes",
+                "namespace": "default",
+                "chart": "nri-bundle-8.0.32",
+                "status": "deployed",
+            }]), encoding="utf-8")
+            environment = {**BASE_ENV, "TF_VAR_enable_newrelic_kubernetes": "true"}
+            arguments = dict(environment=environment, helm_inventory=helm_file, remote_helm="present")
+
+            first = self._reconcile(state, inventory([]), **arguments)
+            second = self._reconcile(state, inventory([]), **arguments)
+
+            self.assertEqual(first, second)
 
     def test_workflow_requires_manual_reconciliation_approval_and_revalidates_plan_identity(self):
         self.assertIn("approve_reconciliation:", WORKFLOW)

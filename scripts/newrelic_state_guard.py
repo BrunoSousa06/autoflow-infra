@@ -80,15 +80,17 @@ def state_addresses(path: str | None) -> set[str]:
         return set()
     except (OSError, json.JSONDecodeError) as error:
         raise StateGuardError("Não foi possível ler o state com segurança.") from error
-    if not isinstance(state, dict) or not isinstance(state.get("version"), int):
+    if not isinstance(state, dict):
         raise StateGuardError("State inválido ou formato não reconhecido; operação bloqueada.")
     root = state.get("values", {}).get("root_module")
     if root is not None:
+        if not isinstance(root, dict):
+            raise StateGuardError("State sem root_module legível; operação bloqueada.")
         return _resources(root)
     # `terraform state pull` retorna o formato serializado do state (resources
     # e instances), diferente do JSON de `terraform show -json`.
     resources = state.get("resources")
-    if isinstance(resources, list):
+    if isinstance(state.get("version"), int) and isinstance(resources, list):
         addresses: set[str] = set()
         for resource in resources:
             if resource.get("mode", "managed") != "managed":
@@ -153,6 +155,52 @@ def state_category_ids(path: str | None) -> dict[str, set[str]]:
                 instance.get("attributes", {}),
             )
     return identities
+
+
+def state_helm_attributes(path: str | None) -> list[dict[str, Any]]:
+    """Retorna os atributos efetivos das instâncias Helm nos formatos de State suportados."""
+    if path is None:
+        return []
+    try:
+        state = json.loads(Path(path).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    except (OSError, json.JSONDecodeError) as error:
+        raise StateGuardError("Não foi possível ler o state com segurança.") from error
+
+    attributes: list[dict[str, Any]] = []
+
+    def visit(module: dict[str, Any]) -> None:
+        for resource in module.get("resources", []):
+            if (
+                resource.get("mode", "managed") == "managed"
+                and resource.get("type") == "helm_release"
+                and resource.get("name") == "newrelic_kubernetes"
+            ):
+                values = resource.get("values")
+                attributes.append(values if isinstance(values, dict) else {})
+        for child in module.get("child_modules", []):
+            visit(child)
+
+    root = state.get("values", {}).get("root_module")
+    if isinstance(root, dict):
+        visit(root)
+        return attributes
+
+    resources = state.get("resources")
+    if not isinstance(resources, list):
+        raise StateGuardError("State sem formato de recursos legível; operação bloqueada.")
+    for resource in resources:
+        if (
+            resource.get("mode", "managed") != "managed"
+            or resource.get("type") != "helm_release"
+            or resource.get("name") != "newrelic_kubernetes"
+        ):
+            continue
+        for instance in resource.get("instances", []):
+            values = instance.get("attributes")
+            attributes.append(values if isinstance(values, dict) else {})
+    return attributes
 
 
 def state_identities(path: str | None) -> set[str]:
