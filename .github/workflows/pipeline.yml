@@ -123,7 +123,7 @@ jobs:
           AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
           AWS_TERRAFORM_STATE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
           AWS_REGION: ${{ vars.AWS_REGION }}
-          APPROVE_CREATE: ${{ inputs.approve_state_bucket_creation && 'true' || 'false' }}
+          APPROVE_CREATE: ${{ github.ref == 'refs/heads/develop' && vars.APPROVE_CREATE == 'true' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.approve_state_bucket_creation && 'true' || 'false') }}
         run: |
           if [ "$APPROVE_CREATE" = true ]; then python scripts/bootstrap_state_bucket.py --approve-create; else python scripts/bootstrap_state_bucket.py; fi
       - name: Autorizar IP público exclusivo no EKS e aguardar atualização
