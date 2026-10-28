@@ -15,7 +15,11 @@ on:
       approve_state_bucket_creation:
         description: Permitir bootstrap do bucket de Terraform State quando ausente
         type: boolean
-        default: true
+        default: false
+      approve_eks_state_reconciliation:
+        description: Autorizar imports de rede/acesso EKS somente para recursos inequivocamente correspondentes ao root
+        type: boolean
+        default: false
       allow_destructive:
         description: Autorizar exclusões/substituições após revisar o plan
         type: boolean
@@ -40,6 +44,7 @@ jobs:
       - run: python -m unittest discover -s scripts -p "test_verify_eks_iam_roles.py" -v
       - run: python -m unittest discover -s scripts -p "test_eks_endpoint_access.py" -v
       - run: python -m unittest discover -s scripts -p "test_prepare_eks_access_imports.py" -v
+      - run: python -m unittest discover -s scripts -p "test_prepare_eks_network_imports.py" -v
       - run: python -m unittest discover -s scripts -p "test_state_resource_guard.py" -v
       - run: python -m unittest discover -s scripts -p "test_review_eks_plan.py" -v
       - uses: hashicorp/setup-terraform@v3
@@ -63,15 +68,11 @@ jobs:
       TF_STATE_KEY: ${{ vars.AWS_TF_STATE_KEY_INFRA }}
       TF_VAR_aws_allowed_account_ids: '["${{ vars.AWS_EXPECTED_ACCOUNT_ID }}"]'
       TF_VAR_region_default: ${{ vars.AWS_REGION }}
-      TF_VAR_cluster_role_arn: ${{ vars.AWS_EKS_CLUSTER_ROLE_ARN }}
-      TF_VAR_node_role_arn: ${{ vars.AWS_EKS_NODE_ROLE_ARN }}
-      TF_VAR_operator_access_role_arn: ${{ vars.AWS_EKS_OPERATOR_ACCESS_ROLE_ARN }}
-      AWS_EKS_CLUSTER_ROLE_ARN: ${{ vars.AWS_EKS_CLUSTER_ROLE_ARN }}
-      AWS_EKS_NODE_ROLE_ARN: ${{ vars.AWS_EKS_NODE_ROLE_ARN }}
-      EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
+      EKS_CLUSTER_NAME: eks-autoflow
       EKS_LEASE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       EKS_LEASE_KEY: ci/eks-endpoint-lease.json
       ALLOW_DESTRUCTIVE: ${{ (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && (github.event_name == 'push' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false')) || 'false' }}
+      ALLOW_EKS_STATE_RECONCILIATION: ${{ github.event_name == 'workflow_dispatch' && inputs.approve_eks_state_reconciliation && 'true' || 'false' }}
       PLAN_ENCRYPTION_PASSPHRASE: ${{ secrets.TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE }}
       AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
     steps:
@@ -95,8 +96,25 @@ jobs:
           python scripts/verify_aws_account.py
           echo "ip=$(curl -4fsS https://checkip.amazonaws.com | tr -d '\n')" >> "$GITHUB_OUTPUT"
           test -n "$PLAN_ENCRYPTION_PASSPHRASE"
-      - name: Validar IAM Roles, trust policies e policies do EKS
-        run: python scripts/verify_eks_iam_roles.py --cluster "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --expected-account "$AWS_EXPECTED_ACCOUNT_ID" --cluster-role-arn "$AWS_EKS_CLUSTER_ROLE_ARN" --node-role-arn "$AWS_EKS_NODE_ROLE_ARN"
+      - name: Descobrir e validar IAM Roles do EKS
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROLES=$(python scripts/verify_eks_iam_roles.py --discover --cluster "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --expected-account "$AWS_EXPECTED_ACCOUNT_ID")
+          CLUSTER_ROLE_ARN=$(python -c 'import json,sys; print(json.load(sys.stdin)["cluster_role_arn"])' <<< "$ROLES")
+          NODE_ROLE_ARN=$(python -c 'import json,sys; print(json.load(sys.stdin)["node_role_arn"])' <<< "$ROLES")
+          {
+            echo "AWS_EKS_CLUSTER_ROLE_ARN=$CLUSTER_ROLE_ARN"
+            echo "AWS_EKS_NODE_ROLE_ARN=$NODE_ROLE_ARN"
+            echo "TF_VAR_cluster_role_arn=$CLUSTER_ROLE_ARN"
+            echo "TF_VAR_node_role_arn=$NODE_ROLE_ARN"
+          } >> "$GITHUB_ENV"
+      - name: Derivar role operador da sessão AWS atual
+        run: |
+          set -euo pipefail
+          OPERATOR_ROLE_ARN=$(python scripts/discover_operator_access_role.py --expected-account "$AWS_EXPECTED_ACCOUNT_ID" --cluster-role-arn "$AWS_EKS_CLUSTER_ROLE_ARN" --node-role-arn "$AWS_EKS_NODE_ROLE_ARN")
+          echo "TF_VAR_operator_access_role_arn=$OPERATOR_ROLE_ARN" >> "$GITHUB_ENV"
+          echo "OPERATOR_ROLE_ARN=$OPERATOR_ROLE_ARN" >> "$GITHUB_ENV"
       - name: Detectar EKS antes do Plan
         id: eks_preflight
         run: python scripts/eks_cluster_preflight.py --cluster "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
@@ -105,10 +123,12 @@ jobs:
           AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
           AWS_TERRAFORM_STATE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
           AWS_REGION: ${{ vars.AWS_REGION }}
-          APPROVE_CREATE: ${{ inputs.approve_state_bucket_creation || 'true' }}
+          APPROVE_CREATE: ${{ inputs.approve_state_bucket_creation && 'true' || 'false' }}
         run: |
           if [ "$APPROVE_CREATE" = true ]; then python scripts/bootstrap_state_bucket.py --approve-create; else python scripts/bootstrap_state_bucket.py; fi
       - name: Autorizar IP público exclusivo no EKS e aguardar atualização
+        id: authorize_eks
+        if: steps.eks_preflight.outputs.exists == 'true'
         env:
           RUNNER_IP: ${{ steps.runner.outputs.ip }}
         run: python scripts/eks_endpoint_access.py authorize --ip "$RUNNER_IP" --region "$AWS_REGION" --cluster "$EKS_CLUSTER_NAME"
@@ -142,10 +162,10 @@ jobs:
           chmod 600 "$RUNNER_TEMP/legacy-infra-state.json"
           python scripts/newrelic_state_guard.py --legacy-only --old-state "$RUNNER_TEMP/legacy-infra-state.json"
           rm -f "$RUNNER_TEMP/legacy-infra-state.json"
-      - name: Preparar imports declarativos para recursos EKS existentes
-        env:
-          OPERATOR_ROLE_ARN: ${{ vars.AWS_EKS_OPERATOR_ACCESS_ROLE_ARN }}
-        run: python scripts/prepare_eks_access_imports.py --cluster "$EKS_CLUSTER_NAME" --principal "$OPERATOR_ROLE_ARN" --region "$AWS_REGION" --output infra/eks-access-imports.auto.tf
+      - name: Preparar imports declarativos da rede EKS com aprovação explícita
+        run: python scripts/prepare_eks_network_imports.py --expected-account "$AWS_EXPECTED_ACCOUNT_ID" --region "$AWS_REGION" --allow-reconciliation "$ALLOW_EKS_STATE_RECONCILIATION" --output infra/eks-network-imports.auto.tf
+      - name: Preparar imports declarativos de acesso EKS
+        run: python scripts/prepare_eks_access_imports.py --cluster "$EKS_CLUSTER_NAME" --principal "$OPERATOR_ROLE_ARN" --region "$AWS_REGION" --allow-imports "$ALLOW_EKS_STATE_RECONCILIATION" --output infra/eks-access-imports.auto.tf
       - name: Diagnosticar integridade dos providers Terraform
         working-directory: infra
         run: python ../scripts/diagnose_terraform_providers.py
@@ -160,6 +180,7 @@ jobs:
           PLAN_ARGS=()
           terraform plan -input=false -no-color "${PLAN_ARGS[@]}" -out=infra.tfplan
           terraform show -json infra.tfplan > infra-plan.json
+          python ../scripts/verify_eks_iam_roles.py --plan-json infra-plan.json --cluster "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --expected-account "$AWS_EXPECTED_ACCOUNT_ID"
           python ../scripts/newrelic_pipeline_guard.py check-legacy-plan infra-plan.json
           python ../scripts/review_eks_plan.py infra-plan.json --allow-destructive "$ALLOW_DESTRUCTIVE"
           if [[ "$GITHUB_REF" == refs/heads/develop || "$GITHUB_REF" == refs/heads/main ]]; then
@@ -169,7 +190,7 @@ jobs:
           fi
           rm -f infra.tfplan infra-plan.json
       - name: Remover autorização temporária
-        if: always()
+        if: always() && steps.authorize_eks.outcome != 'skipped'
         run: |
           python scripts/eks_endpoint_access.py cleanup --region "$AWS_REGION" --cluster "$EKS_CLUSTER_NAME"
           rm -f "$RUNNER_TEMP/legacy-infra-state.json" "$RUNNER_TEMP/legacy-head-error"
@@ -199,15 +220,11 @@ jobs:
       TF_STATE_KEY: ${{ vars.AWS_TF_STATE_KEY_INFRA }}
       TF_VAR_aws_allowed_account_ids: '["${{ vars.AWS_EXPECTED_ACCOUNT_ID }}"]'
       TF_VAR_region_default: ${{ vars.AWS_REGION }}
-      TF_VAR_cluster_role_arn: ${{ vars.AWS_EKS_CLUSTER_ROLE_ARN }}
-      TF_VAR_node_role_arn: ${{ vars.AWS_EKS_NODE_ROLE_ARN }}
-      TF_VAR_operator_access_role_arn: ${{ vars.AWS_EKS_OPERATOR_ACCESS_ROLE_ARN }}
-      AWS_EKS_CLUSTER_ROLE_ARN: ${{ vars.AWS_EKS_CLUSTER_ROLE_ARN }}
-      AWS_EKS_NODE_ROLE_ARN: ${{ vars.AWS_EKS_NODE_ROLE_ARN }}
-      EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
+      EKS_CLUSTER_NAME: eks-autoflow
       EKS_LEASE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       EKS_LEASE_KEY: ci/eks-endpoint-lease.json
       ALLOW_DESTRUCTIVE: ${{ github.event_name == 'push' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false') }}
+      ALLOW_EKS_STATE_RECONCILIATION: ${{ github.event_name == 'workflow_dispatch' && inputs.approve_eks_state_reconciliation && 'true' || 'false' }}
       PLAN_ENCRYPTION_PASSPHRASE: ${{ secrets.TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE }}
       AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
     steps:
@@ -233,8 +250,6 @@ jobs:
         env:
           AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
         run: python scripts/verify_aws_account.py
-      - name: Validar IAM Roles, trust policies e role efetiva do EKS
-        run: python scripts/verify_eks_iam_roles.py --cluster "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --expected-account "$AWS_EXPECTED_ACCOUNT_ID" --cluster-role-arn "$AWS_EKS_CLUSTER_ROLE_ARN" --node-role-arn "$AWS_EKS_NODE_ROLE_ARN"
       - name: Autorizar IP deste runner para Apply
         id: runner
         run: |
@@ -244,6 +259,8 @@ jobs:
         id: eks_preflight
         run: python scripts/eks_cluster_preflight.py --cluster "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
       - name: Atualizar endpoint e aguardar conclusão
+        id: authorize_eks
+        if: steps.eks_preflight.outputs.exists == 'true'
         env:
           RUNNER_IP: ${{ steps.runner.outputs.ip }}
         run: python scripts/eks_endpoint_access.py authorize --ip "$RUNNER_IP" --region "$AWS_REGION" --cluster "$EKS_CLUSTER_NAME"
@@ -269,6 +286,27 @@ jobs:
           set -euo pipefail
           rm -rf .terraform/providers
           terraform init -input=false -lockfile=readonly -reconfigure -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+      - name: Validar e reutilizar roles contidas no Plan aprovado
+        working-directory: infra
+        run: |
+          set -euo pipefail
+          terraform show -json infra.tfplan > infra-plan-roles.json
+          ROLES=$(python ../scripts/verify_eks_iam_roles.py --plan-json infra-plan-roles.json --cluster "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --expected-account "$AWS_EXPECTED_ACCOUNT_ID")
+          CLUSTER_ROLE_ARN=$(python -c 'import json,sys; print(json.load(sys.stdin)["cluster_role_arn"])' <<< "$ROLES")
+          NODE_ROLE_ARN=$(python -c 'import json,sys; print(json.load(sys.stdin)["node_role_arn"])' <<< "$ROLES")
+          {
+            echo "AWS_EKS_CLUSTER_ROLE_ARN=$CLUSTER_ROLE_ARN"
+            echo "AWS_EKS_NODE_ROLE_ARN=$NODE_ROLE_ARN"
+            echo "TF_VAR_cluster_role_arn=$CLUSTER_ROLE_ARN"
+            echo "TF_VAR_node_role_arn=$NODE_ROLE_ARN"
+          } >> "$GITHUB_ENV"
+          rm -f infra-plan-roles.json
+      - name: Derivar role operador da sessão AWS atual
+        run: |
+          set -euo pipefail
+          OPERATOR_ROLE_ARN=$(python scripts/discover_operator_access_role.py --expected-account "$AWS_EXPECTED_ACCOUNT_ID" --cluster-role-arn "$AWS_EKS_CLUSTER_ROLE_ARN" --node-role-arn "$AWS_EKS_NODE_ROLE_ARN")
+          echo "TF_VAR_operator_access_role_arn=$OPERATOR_ROLE_ARN" >> "$GITHUB_ENV"
+          echo "OPERATOR_ROLE_ARN=$OPERATOR_ROLE_ARN" >> "$GITHUB_ENV"
       - name: Confirmar ausência de ownership New Relic no state legado
         run: |
           set -euo pipefail
@@ -285,6 +323,11 @@ jobs:
           chmod 600 "$RUNNER_TEMP/legacy-infra-state.json"
           python scripts/newrelic_state_guard.py --legacy-only --old-state "$RUNNER_TEMP/legacy-infra-state.json"
           rm -f "$RUNNER_TEMP/legacy-infra-state.json"
+      - name: Preparar imports declarativos usados pelo plan aprovado
+        run: |
+          set -euo pipefail
+          python scripts/prepare_eks_network_imports.py --expected-account "$AWS_EXPECTED_ACCOUNT_ID" --region "$AWS_REGION" --allow-reconciliation "$ALLOW_EKS_STATE_RECONCILIATION" --output infra/eks-network-imports.auto.tf
+          python scripts/prepare_eks_access_imports.py --cluster "$EKS_CLUSTER_NAME" --principal "$OPERATOR_ROLE_ARN" --region "$AWS_REGION" --allow-imports "$ALLOW_EKS_STATE_RECONCILIATION" --output infra/eks-access-imports.auto.tf
       - name: Inspecionar plan aprovado e validar guards
         working-directory: infra
         env:
@@ -299,7 +342,7 @@ jobs:
         working-directory: infra
         run: terraform apply -input=false infra.tfplan
       - name: Limpar CIDR temporário mesmo após falha
-        if: always()
+        if: always() && steps.authorize_eks.outcome != 'skipped'
         run: |
           python scripts/eks_endpoint_access.py cleanup --region "$AWS_REGION" --cluster "$EKS_CLUSTER_NAME"
           rm -f "$RUNNER_TEMP/legacy-infra-state.json" "$RUNNER_TEMP/legacy-head-error"

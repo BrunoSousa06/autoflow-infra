@@ -6,8 +6,6 @@ resource "aws_eks_node_group" "node_group" {
   disk_size       = 50
   instance_types  = [var.instance_type]
 
-  depends_on = [aws_vpc_security_group_ingress_rule.eks_self]
-
   scaling_config {
     desired_size = var.node_desired_size
     max_size     = var.node_max_size

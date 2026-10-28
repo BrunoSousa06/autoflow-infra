@@ -9,6 +9,9 @@ from pathlib import Path
 
 
 VPC_LINK_ADDRESS = "module.private_eks.aws_apigatewayv2_vpc_link.this"
+VPC_LINK_SECURITY_GROUP_ADDRESS = "module.private_eks.aws_security_group.link"
+VPC_LINK_ID = re.compile(r"[A-Za-z0-9]+\Z")
+SECURITY_GROUP_ID = re.compile(r"sg-(?:[0-9a-f]{8}|[0-9a-f]{17})\Z")
 
 
 def missing_state_error(error):
@@ -37,16 +40,32 @@ def state_addresses(bucket, key):
 
 def discover_imports(addresses, links, expected_name):
     if VPC_LINK_ADDRESS in addresses:
-        return []
+        import_link = False
+    else:
+        import_link = True
     matching = [link for link in links if link.get("Name") == expected_name]
     if len(matching) > 1:
         raise RuntimeError(f"Há múltiplos VPC Links chamados {expected_name}; import automático bloqueado.")
     if not matching:
         return []
-    link_id = matching[0].get("VpcLinkId")
-    if not isinstance(link_id, str) or re.fullmatch(r"[A-Za-z0-9_-]+", link_id) is None:
+
+    link = matching[0]
+    imports = []
+    link_id = link.get("VpcLinkId")
+    if not isinstance(link_id, str) or VPC_LINK_ID.fullmatch(link_id) is None:
         raise RuntimeError("AWS retornou VPC Link sem identificador válido; import bloqueado.")
-    return [(VPC_LINK_ADDRESS, link_id)]
+    if import_link:
+        imports.append((VPC_LINK_ADDRESS, link_id))
+
+    security_groups = link.get("SecurityGroupIds")
+    if not isinstance(security_groups, list) or len(security_groups) != 1:
+        raise RuntimeError("O VPC Link não possui exatamente um Security Group; reconciliação bloqueada.")
+    security_group_id = security_groups[0]
+    if not isinstance(security_group_id, str) or SECURITY_GROUP_ID.fullmatch(security_group_id) is None:
+        raise RuntimeError("AWS retornou Security Group do VPC Link sem identificador válido; import bloqueado.")
+    if VPC_LINK_SECURITY_GROUP_ADDRESS not in addresses:
+        imports.append((VPC_LINK_SECURITY_GROUP_ADDRESS, security_group_id))
+    return imports
 
 
 def render_imports(imports):

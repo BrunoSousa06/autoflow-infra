@@ -20,7 +20,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: autoflow-newrelic-${{ github.ref }}
+  group: autoflow-eks-endpoint-deploy
   cancel-in-progress: false
 
 jobs:
@@ -50,10 +50,8 @@ jobs:
       TF_STATE_KEY: ${{ vars.AWS_TF_STATE_KEY_NEWRELIC }}
       EKS_LEASE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       EKS_LEASE_KEY: ci/eks-endpoint-lease-newrelic-${{ github.run_id }}-${{ github.run_attempt }}-plan.json
-      EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
       TF_VAR_aws_region: ${{ vars.AWS_REGION }}
       TF_VAR_aws_allowed_account_ids: '["${{ vars.AWS_EXPECTED_ACCOUNT_ID }}"]'
-      TF_VAR_eks_cluster_name: ${{ vars.EKS_CLUSTER_NAME }}
       TF_VAR_enable_newrelic_kubernetes: ${{ vars.ENABLE_NEWRELIC_KUBERNETES || 'false' }}
       TF_VAR_enable_newrelic_account_resources: ${{ vars.ENABLE_NEWRELIC_ACCOUNT_RESOURCES || 'false' }}
       TF_VAR_newrelic_account_id: ${{ vars.NEW_RELIC_ACCOUNT_ID || 'null' }}
@@ -76,7 +74,6 @@ jobs:
           python scripts/newrelic_pipeline_guard.py validate
           test -n "$AWS_REGION"
           [[ "$AWS_REGION" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$ ]]
-          test -n "$EKS_CLUSTER_NAME"
           test -n "$TF_STATE_BUCKET"
           test -n "$TF_STATE_KEY"
           test -n "$AWS_TF_STATE_KEY_INFRA"
@@ -95,6 +92,13 @@ jobs:
           python scripts/verify_aws_account.py
           test "$(aws ec2 describe-availability-zones --region "$AWS_REGION" --query 'AvailabilityZones[0].RegionName' --output text)" = "$AWS_REGION"
           test -n "$PLAN_ENCRYPTION_PASSPHRASE"
+      - name: Descobrir cluster EKS e preencher input Terraform
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t CLUSTERS < <(aws eks list-clusters --region "$AWS_REGION" --query 'clusters[]' --output text | tr '\t' '\n' | sed '/^$/d')
+          test "${#CLUSTERS[@]}" -eq 1 || { echo "Esperado exatamente um cluster EKS na conta/região; encontrados ${#CLUSTERS[@]}." >&2; exit 1; }
+          printf 'EKS_CLUSTER_NAME=%s\nTF_VAR_eks_cluster_name=%s\n' "${CLUSTERS[0]}" "${CLUSTERS[0]}" >> "$GITHUB_ENV"
       - name: Confirmar reviewers obrigatórios no Environment
         env:
           GH_TOKEN: ${{ github.token }}
@@ -145,6 +149,10 @@ jobs:
       - name: Capturar IP do runner
         id: runner
         run: echo "ip=$(curl -4fsS https://checkip.amazonaws.com | tr -d '\n')" >> "$GITHUB_OUTPUT"
+      - name: Reconciliar leases órfãos do endpoint EKS
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/eks_endpoint_access.py reconcile-orphans --region "$AWS_REGION" --cluster "$EKS_CLUSTER_NAME"
       - name: Autorizar temporariamente o runner no endpoint EKS
         id: authorize_eks
         env:
@@ -154,6 +162,12 @@ jobs:
         run: |
           set -euo pipefail
           aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" >/dev/null
+      - name: Confirmar workloads AutoFlow antes de habilitar observabilidade
+        run: |
+          set -euo pipefail
+          if [ "$TF_VAR_enable_newrelic_kubernetes" = true ] || [ "$TF_VAR_enable_newrelic_account_resources" = true ]; then
+            python scripts/newrelic_pipeline_guard.py verify-workloads
+          fi
       - name: Validar Secret Kubernetes antes da instalação Helm
         if: env.TF_VAR_enable_newrelic_kubernetes == 'true'
         run: |
@@ -227,10 +241,8 @@ jobs:
       TF_STATE_KEY: ${{ vars.AWS_TF_STATE_KEY_NEWRELIC }}
       EKS_LEASE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       EKS_LEASE_KEY: ci/eks-endpoint-lease-newrelic-${{ github.run_id }}-${{ github.run_attempt }}-apply.json
-      EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
       TF_VAR_aws_region: ${{ vars.AWS_REGION }}
       TF_VAR_aws_allowed_account_ids: '["${{ vars.AWS_EXPECTED_ACCOUNT_ID }}"]'
-      TF_VAR_eks_cluster_name: ${{ vars.EKS_CLUSTER_NAME }}
       PLAN_ENCRYPTION_PASSPHRASE: ${{ secrets.TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE }}
       TF_VAR_enable_newrelic_kubernetes: ${{ vars.ENABLE_NEWRELIC_KUBERNETES || 'false' }}
       TF_VAR_enable_newrelic_account_resources: ${{ vars.ENABLE_NEWRELIC_ACCOUNT_RESOURCES || 'false' }}
@@ -265,9 +277,20 @@ jobs:
           test "$APPROVAL_CONFIGURED" = true
           REVIEWERS=$(gh api "repos/$GITHUB_REPOSITORY/environments/$DEPLOY_ENVIRONMENT" --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length')
           test "$REVIEWERS" -gt 0
+      - name: Descobrir cluster EKS e preencher input Terraform
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t CLUSTERS < <(aws eks list-clusters --region "$AWS_REGION" --query 'clusters[]' --output text | tr '\t' '\n' | sed '/^$/d')
+          test "${#CLUSTERS[@]}" -eq 1 || { echo "Esperado exatamente um cluster EKS na conta/região; encontrados ${#CLUSTERS[@]}." >&2; exit 1; }
+          printf 'EKS_CLUSTER_NAME=%s\nTF_VAR_eks_cluster_name=%s\n' "${CLUSTERS[0]}" "${CLUSTERS[0]}" >> "$GITHUB_ENV"
       - name: Capturar IP do runner
         id: runner
         run: echo "ip=$(curl -4fsS https://checkip.amazonaws.com | tr -d '\n')" >> "$GITHUB_OUTPUT"
+      - name: Reconciliar leases órfãos do endpoint EKS
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/eks_endpoint_access.py reconcile-orphans --region "$AWS_REGION" --cluster "$EKS_CLUSTER_NAME"
       - name: Autorizar temporariamente o runner no endpoint EKS
         id: authorize_eks
         env:
@@ -307,6 +330,9 @@ jobs:
             test "$NG_STATUS" = ACTIVE
           done
           aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" >/dev/null
+          if [ "$TF_VAR_enable_newrelic_kubernetes" = true ] || [ "$TF_VAR_enable_newrelic_account_resources" = true ]; then
+            python scripts/newrelic_pipeline_guard.py verify-workloads
+          fi
           if [ "$TF_VAR_enable_newrelic_kubernetes" = true ]; then
             python scripts/newrelic_pipeline_guard.py verify-secret
           fi

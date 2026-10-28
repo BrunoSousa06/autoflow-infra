@@ -15,6 +15,7 @@ O inventário fornecido ao guard precisa ser produzido por coleta AWS read-only 
 - Permissão `sts:GetCallerIdentity`; o guard compara a conta efetiva com `--expected-account` e verifica a região do relatório.
 - Conta/região e nome do bucket informados por configuration/Environment, não codificados nos scripts. Região default `us-east-1`; usar `AWS_EXPECTED_ACCOUNT_ID`/validação de identidade antes de integrar em workflow.
 - Permissões S3 read para `HeadBucket`, `HeadObject`, `GetPublicAccessBlock`, `GetBucketVersioning`, `GetBucketEncryption`. Para criação futura, as permissões de `CreateBucket`, `PutPublicAccessBlock`, `PutBucketVersioning`, `PutEncryptionConfiguration` precisam ser confirmadas no Learner Lab.
+- O nome configurado em `AWS_TERRAFORM_STATE_BUCKET` tem prioridade. Se estiver ausente, `scripts/resolve_state_bucket.py` deriva `autoflow-tfstate-learnerlab-<AWS_EXPECTED_ACCOUNT_ID>-<AWS_REGION>` após validar conta e região; não há account ID fixo no código.
 - A aprovação da política Academy/IAM e do ambiente GitHub deve anteceder qualquer uso de `--create`. `AccessDenied`, `403`, erro de rede ou erro genérico sempre bloqueiam classificação como ausência.
 
 ## Diagnóstico do bucket

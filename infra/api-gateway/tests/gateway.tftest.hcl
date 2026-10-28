@@ -16,6 +16,27 @@ override_data {
   target = data.terraform_remote_state.eks
   values = { outputs = { vpc_id = "vpc-12345678", private_subnet_ids = ["subnet-12345678", "subnet-87654321"] } }
 }
+override_resource {
+  target = module.private_eks.aws_security_group.link
+  values = {
+    id          = "sg-0123456789abcdef0"
+    name        = "autoflow-homolog-link-test"
+    description = "Saida do VPC Link exclusivamente para o ALB interno"
+    vpc_id      = "vpc-12345678"
+    ingress     = []
+    egress      = []
+    tags_all    = { Project = "autoflow", Environment = "homolog", ManagedBy = "Terraform" }
+  }
+}
+override_resource {
+  target = module.private_eks.aws_apigatewayv2_vpc_link.this
+  values = {
+    id                 = "testvpclink"
+    name               = "autoflow-homolog"
+    subnet_ids         = ["subnet-12345678", "subnet-87654321"]
+    security_group_ids = ["sg-0123456789abcdef0"]
+  }
+}
 variables {
   expected_account_id    = "123456789012"
   terraform_state_bucket = "autoflow-teste-state"

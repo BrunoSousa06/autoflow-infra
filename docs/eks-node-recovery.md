@@ -8,7 +8,7 @@ O sintoma informado é: `nodeg-autoflow` ACTIVE, duas EC2 `running`, nenhum Node
 
 - `infra/eks-node.tf` declara um managed node group padrão (`aws_eks_node_group`) com duas instâncias desejadas e não declara `launch_template`, `ami_type`, AMI própria ou `user_data`.
 - `infra/eks-cluster.tf` declara Kubernetes `1.35`. AWS documenta que managed node groups novos em clusters Kubernetes `1.30+` adotam AL2023 por padrão. O AMI efetivamente executado pelo node group atual não foi consultado.
-- IAM de cluster e node é fornecido externamente por `AWS_EKS_CLUSTER_ROLE_ARN`/`AWS_EKS_NODE_ROLE_ARN`; este repositório não cria roles/policies. O workflow agora executa preflight read-only de existência, trust policy e AWS managed policies requeridas; isso só comprova o resultado na execução autorizada e não corrige configuração IAM.
+- O workflow descobre as IAM Roles de cluster e node na conta validada por STS, exigindo correspondência única, trust policy apropriada e AWS managed policies requeridas; não cria nem altera roles/policies. O Apply valida os ARNs exatos do Plan aprovado sem redescobri-los.
 - A VPC declara subnets públicas com IP público automático, IGW e egress no SG. Isso é configuração versionada; não comprova rotas, SG efetivo, SCP, nem conectividade atual do runtime.
 - Não existe configuração de bootstrap `nodeadm` explícita no Terraform; o EKS gerencia o launch template e user data do managed node group.
 - Nesta sessão, `aws sts get-caller-identity` não encontrou credenciais válidas e não foi possível consultar EC2, EKS, CloudTrail ou logs dos nós. `kubectl` está instalado, mas não foi usado sem identidade AWS/cluster autorizada.

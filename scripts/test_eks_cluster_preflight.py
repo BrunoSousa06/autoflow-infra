@@ -21,6 +21,28 @@ class EksClusterPreflightTests(unittest.TestCase):
         ):
             self.assertTrue(cluster_exists("eks-autoflow", "us-east-1"))
 
+    def test_cluster_creator_bootstrap_is_disabled_when_operator_entry_is_explicit(self):
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[1] / "infra"
+        cluster = (root / "eks-cluster.tf").read_text(encoding="utf-8")
+        access = (root / "access-entry-eks.tf").read_text(encoding="utf-8")
+        self.assertIn('authentication_mode                         = "API"', cluster)
+        self.assertIn("bootstrap_cluster_creator_admin_permissions = false", cluster)
+        self.assertIn("cluster_name  = aws_eks_cluster.autoflow.name", access)
+        self.assertIn("principal_arn = local.effective_access_role_arn", access)
+        self.assertIn("AmazonEKSClusterAdminPolicy", access)
+        self.assertIn("aws_eks_access_entry.access_entry", access.split("depends_on = [", 1)[1])
+
+    def test_eks_managed_self_ingress_is_not_declared_or_a_node_group_dependency(self):
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[1] / "infra"
+        security_group = (root / "sg.tf").read_text(encoding="utf-8")
+        node_group = (root / "eks-node.tf").read_text(encoding="utf-8")
+        self.assertNotIn('resource "aws_vpc_security_group_ingress_rule" "eks_self"', security_group)
+        self.assertNotIn("aws_vpc_security_group_ingress_rule.eks_self", node_group)
+
     def test_access_denied_is_not_misclassified_as_missing(self):
         denied = subprocess.CalledProcessError(254, "aws", stderr="AccessDeniedException")
         with patch("eks_cluster_preflight.subprocess.run", side_effect=denied):
