@@ -72,7 +72,7 @@ jobs:
       EKS_LEASE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       EKS_LEASE_KEY: ci/eks-endpoint-lease.json
       ALLOW_DESTRUCTIVE: ${{ (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && (github.event_name == 'push' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false')) || 'false' }}
-      ALLOW_EKS_STATE_RECONCILIATION: ${{ github.event_name == 'workflow_dispatch' && inputs.approve_eks_state_reconciliation && 'true' || 'false' }}
+      ALLOW_EKS_STATE_RECONCILIATION: ${{ github.ref == 'refs/heads/develop' && vars.ALLOW_EKS_STATE_RECONCILIATION == 'true' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.approve_eks_state_reconciliation && 'true' || 'false') }}
       PLAN_ENCRYPTION_PASSPHRASE: ${{ secrets.TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE }}
       AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
     steps:
@@ -163,11 +163,9 @@ jobs:
           python scripts/newrelic_state_guard.py --legacy-only --old-state "$RUNNER_TEMP/legacy-infra-state.json"
           rm -f "$RUNNER_TEMP/legacy-infra-state.json"
       - name: Preparar imports declarativos da rede EKS
-        env:
-          ALLOW_EKS_STATE_RECONCILIATION: ${{ github.ref == 'refs/heads/develop' && vars.ALLOW_EKS_STATE_RECONCILIATION == 'true' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.approve_eks_state_reconciliation && 'true' || 'false') }}
         run: python scripts/prepare_eks_network_imports.py --expected-account "$AWS_EXPECTED_ACCOUNT_ID" --region "$AWS_REGION" --allow-reconciliation "$ALLOW_EKS_STATE_RECONCILIATION" --output infra/eks-network-imports.auto.tf
       - name: Preparar imports declarativos de acesso EKS
-        run: python scripts/prepare_eks_access_imports.py --cluster "$EKS_CLUSTER_NAME" --principal "$OPERATOR_ROLE_ARN" --region "$AWS_REGION" --allow-imports "$ALLOW_EKS_STATE_RECONCILIATION" --output infra/eks-access-imports.auto.tf
+        run: python scripts/prepare_eks_access_imports.py --cluster "$EKS_CLUSTER_NAME" --principal "$OPERATOR_ROLE_ARN" --region "$AWS_REGION" --allow-imports "${{ github.event_name == 'workflow_dispatch' && inputs.approve_eks_state_reconciliation && 'true' || 'false' }}" --output infra/eks-access-imports.auto.tf
       - name: Diagnosticar integridade dos providers Terraform
         working-directory: infra
         run: python ../scripts/diagnose_terraform_providers.py
@@ -226,7 +224,7 @@ jobs:
       EKS_LEASE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       EKS_LEASE_KEY: ci/eks-endpoint-lease.json
       ALLOW_DESTRUCTIVE: ${{ github.event_name == 'push' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false') }}
-      ALLOW_EKS_STATE_RECONCILIATION: ${{ github.event_name == 'workflow_dispatch' && inputs.approve_eks_state_reconciliation && 'true' || 'false' }}
+      ALLOW_EKS_STATE_RECONCILIATION: ${{ github.ref == 'refs/heads/develop' && vars.ALLOW_EKS_STATE_RECONCILIATION == 'true' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.approve_eks_state_reconciliation && 'true' || 'false') }}
       PLAN_ENCRYPTION_PASSPHRASE: ${{ secrets.TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE }}
       AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
     steps:
@@ -329,7 +327,7 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/prepare_eks_network_imports.py --expected-account "$AWS_EXPECTED_ACCOUNT_ID" --region "$AWS_REGION" --allow-reconciliation "$ALLOW_EKS_STATE_RECONCILIATION" --output infra/eks-network-imports.auto.tf
-          python scripts/prepare_eks_access_imports.py --cluster "$EKS_CLUSTER_NAME" --principal "$OPERATOR_ROLE_ARN" --region "$AWS_REGION" --allow-imports "$ALLOW_EKS_STATE_RECONCILIATION" --output infra/eks-access-imports.auto.tf
+          python scripts/prepare_eks_access_imports.py --cluster "$EKS_CLUSTER_NAME" --principal "$OPERATOR_ROLE_ARN" --region "$AWS_REGION" --allow-imports "${{ github.event_name == 'workflow_dispatch' && inputs.approve_eks_state_reconciliation && 'true' || 'false' }}" --output infra/eks-access-imports.auto.tf
       - name: Inspecionar plan aprovado e validar guards
         working-directory: infra
         env:
