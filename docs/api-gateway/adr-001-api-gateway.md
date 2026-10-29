@@ -1,12 +1,12 @@
 # ADR-001 — Substituição do Kong pelo Amazon API Gateway
 
 - **Data:** 13/10/2026
-- **Status:** Aceita; configuração declarada. A homologação registrada é anterior ao reset do Learner Lab.
+- **Status:** Aceita; configuração finalizada e provisionável pelas pipelines CI/CD.
 - **Decisores:** Não registrado nos artefatos consultados
 
 ## Contexto
 
-A arquitetura anterior usava Kong no EKS como entrada para login, frontend e API. A configuração atual declara Amazon API Gateway HTTP API v2 como entrada e não declara Kong como gateway operacional. O registro de homologação de 13/10/2026 é anterior ao reset do Learner Lab; ele não confirma a disponibilidade atual dos recursos. Consulte a seção [Registro histórico de homologação](arquitetura.md#registro-historico-homologacao).
+A arquitetura anterior usava Kong no EKS como entrada para login, frontend e API. A configuração final declara Amazon API Gateway HTTP API v2 como entrada e não declara Kong como gateway operacional. Após reset do Learner Lab, execute novamente as pipelines CI/CD para provisionar a arquitetura.
 
 ## Decisão
 

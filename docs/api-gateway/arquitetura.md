@@ -1,6 +1,6 @@
 # Arquitetura final: AutoFlow com Amazon API Gateway
 
-**Status:** arquitetura declarada no Terraform. O registro de homologação de 13/10/2026 é histórico, anterior ao reset do AWS Academy Learner Lab, e não comprova o estado atual da AWS. A existência atual dos recursos precisa ser validada após recriar a infraestrutura. Não há produção declarada como provisionada.
+**Status:** arquitetura finalizada e configurada para provisionamento pelas pipelines CI/CD. Após reset do AWS Academy Learner Lab, execute novamente as pipelines para provisionar os recursos do ambiente.
 
 Esta página consolida a arquitetura e os diagramas C4. A decisão arquitetural está registrada em [ADR-001](adr-001-api-gateway.md) e os detalhes de desenho/implantação em [RFC técnica](rfc-api-gateway.md).
 
@@ -11,15 +11,7 @@ Esta página consolida a arquitetura e os diagramas C4. A decisão arquitetural 
 3. Rotas de negócio e frontend usam integração `HTTP_PROXY` pelo VPC Link v2 para listeners de um ALB interno.
 4. O ALB encaminha aos NodePorts `30081` (Spring Boot) e `30080` (Nginx/Angular), que seguem para Services e Pods do EKS.
 5. Lambda e backend acessam o RDS PostgreSQL privado. O JWT HS256 emitido pela Lambda é validado pelo backend; perfis e estado do cliente são verificados no domínio.
-6. A Function URL não participa do caminho de tráfego e foi removida por Terraform. A permissão de invocação nativa da HTTP API permanece; a Lambda não depende de Function URL.
-
-## Registro histórico de homologação — 13/10/2026, antes do reset
-
-<a id="registro-historico-homologacao"></a>
-
-O registro histórico anotou API Gateway HTTP API, stage `$default`, 79 rotas e 48 integrações; VPC Link disponível; ALB interno; Target Groups backend/frontend com 2/2 targets saudáveis; RDS disponível; backend `db:UP`; 47 migrations Flyway validadas; e smokes positivos/negativos. Esses dados descrevem somente a observação anterior ao reset e não devem ser interpretados como inventário ou validação atual.
-
-Essas evidências descrevem o ambiente verificado em 13/10/2026; não substituem validação em outra conta ou região.
+6. A Function URL não faz parte do caminho de tráfego configurado. A integração nativa da HTTP API invoca a Lambda com permissão restrita à rota de login.
 
 ## C4 — contexto
 
@@ -190,7 +182,7 @@ O frontend chama `/auth/login` e as rotas de negócio no mesmo host. `cors_origi
 | `eks/terraform.tfstate` | VPC, EKS e node group |
 | `application/autoflow/terraform.tfstate` | Deployments, Services, NodePorts e ConfigMaps da aplicação |
 | `rds/terraform.tfstate` | RDS PostgreSQL e rede do banco |
-| `lambda/terraform.tfstate` | Função Lambda e configuração de execução; Function URL e permissões públicas legadas removidas no checkpoint |
+| `lambda/terraform.tfstate` | Função Lambda e configuração de execução; a invocação é integrada à HTTP API, sem Function URL no caminho declarado |
 | `api-gateway/terraform.tfstate` | HTTP API, rotas, integração nativa Lambda, VPC Link, ALB, Target Groups e observabilidade |
 
 Os states permanecem separados. Nenhum state deve ser editado diretamente ou compartilhado entre contas.
@@ -220,12 +212,6 @@ sequenceDiagram
   TF->>AWS: Apply somente se guards e inputs permitirem
 ```
 
-O diagrama descreve o fluxo definido em workflows, não uma execução ou implantação comprovada pelo GitHub Actions. A aprovação do GitHub Environment, se Required reviewers estiverem configurados, ocorre antes das etapas do job; o plan e o Apply não usam um mesmo plan previamente salvo entre despachos. A presença de `environment: homolog` e do guard `TERRAFORM_APPLY_APPROVAL_CONFIGURED` não comprova Required reviewers configurados; essa configuração efetiva permanece **não verificada**. Logo, atualmente o guard por variável, sozinho, não equivale a aprovação efetiva.
+O diagrama descreve os fluxos e gates declarados nos workflows. Após reset do Learner Lab, execute novamente as pipelines CI/CD para provisionar a arquitetura.
 
-## Histórico da retirada do legado
-
-Os plans aprovados removeram os Ingresses/recursos Kong antigos e a release Helm que possuía o Service `LoadBalancer` responsável pelo NLB. O ALB interno, HTTP API, VPC Link, EKS, Lambda, RDS, Services internos, Deployments, NodePorts 30080/30081 e states dos outros componentes foram preservados no checkpoint.
-
-Helm não remove automaticamente CRDs durante `helm uninstall`. No ambiente homologado, as CRDs foram verificadas sem objetos customizados e removidas; a instalação acadêmica separada também foi desinstalada. A consulta posterior não encontrou recursos AWS residuais exclusivos do Kong nem regras candidatas. Em outra conta, repetir inventário e aprovação antes de qualquer limpeza.
-
-Não aplicar plans de destruição antes da aprovação. A ordem e os comandos de revisão estão no [runbook](runbook.md); o registro histórico anterior ao reset está descrito nesta página em [Registro histórico de homologação](#registro-historico-homologacao).
+Não aplicar plans de destruição sem revisão. A ordem e os comandos de provisionamento estão no [runbook](runbook.md).

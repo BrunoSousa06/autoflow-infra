@@ -6,7 +6,7 @@ Este repositório declara a infraestrutura AWS do AutoFlow com Terraform. A arqu
 
 Leia na ordem: [arquitetura e diagramas C4](docs/api-gateway/arquitetura.md), [ADR-001](docs/api-gateway/adr-001-api-gateway.md), [RFC técnica](docs/api-gateway/rfc-api-gateway.md), [runbook operacional](docs/api-gateway/runbook.md). O [README do root Terraform](infra/api-gateway/README.md) contém validações locais.
 
-O contrato central da aplicação está no [OpenAPI e guia da API](https://github.com/BrunoSousa06/autoflow/blob/develop/docs/openapi/README.md); a [coleção Postman de autenticação CPF/JWT](https://github.com/BrunoSousa06/autoflow/blob/develop/backend/postman/autoflow-serverless-auth.postman_collection.json) também é mantida no repositório da aplicação.
+O contrato central da aplicação está no [OpenAPI e guia da API](https://github.com/autoflow-fiap/autoflow/blob/develop/docs/openapi/README.md); a [coleção Postman de autenticação CPF/JWT](https://github.com/autoflow-fiap/autoflow/blob/develop/backend/postman/autoflow-serverless-auth.postman_collection.json) também é mantida no repositório da aplicação.
 
 Após reset do Learner Lab, consulte o [catálogo de variables e secrets](docs/variables-and-secrets.md): configure bucket/keys do Terraform State, região, conta esperada, três roles IAM distintas e credenciais temporárias AWS. Cluster, node group e Lambda são verificados/descobertos por AWS; não configure nomes manuais desses recursos.
 

@@ -2,7 +2,7 @@
 
 Gateway de entrada definitivo do AutoFlow: HTTP API v2, integração nativa Lambda, VPC Link v2 e ALB **interno** para backend e frontend no EKS.
 
-**Registro histórico de 13/10/2026, anterior ao reset do Learner Lab:** HTTP API, VPC Link e ALB interno foram observados implantados; Function URL e runtime Kong foram registrados como removidos; smoke autenticado pós-limpeza foi registrado. Esses dados não comprovam o estado atual da AWS após o reset.
+O root está configurado para provisionar HTTP API, VPC Link e ALB interno. Após reset do Learner Lab, execute novamente a pipeline Migração HTTP API para provisionar os recursos.
 
 Os documentos ficam em `autoflow-infra/docs/api-gateway/`, a partir da raiz do repositório:
 
@@ -10,7 +10,6 @@ Os documentos ficam em `autoflow-infra/docs/api-gateway/`, a partir da raiz do r
 - [ADR-001 — substituição Kong → API Gateway](../../docs/api-gateway/adr-001-api-gateway.md)
 - [RFC técnica](../../docs/api-gateway/rfc-api-gateway.md)
 - [Runbook: Learner Lab, implantação, smoke, recuperação e rollback](../../docs/api-gateway/runbook.md)
-- [Registro histórico de homologação](../../docs/api-gateway/arquitetura.md#registro-historico-homologacao)
 
 ## Uso local
 

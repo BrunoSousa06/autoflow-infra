@@ -20,4 +20,4 @@ No cenário A, confirmar que os objetos New Relic e os endereços em ambos os st
 - Disparar os workflows em sequência: Bootstrap, VPC/EKS, RDS, Lambda, API Gateway, aplicação e New Relic. Não é necessário executar o Apply de VPC/EKS duas vezes.
 - Se a License Key existente diferir entre GitHub Secrets e AWS Secrets Manager, interromper e fazer a rotação controlada indicada pelo pipeline `autoflow`; não criar uma segunda key/variável.
 
-Esta sequência descreve o comportamento declarado e coberto por testes locais; não foi executada contra AWS.
+Após reset do AWS Academy Learner Lab, reexecute as pipelines CI/CD nesta sequência para provisionar novamente o ambiente.

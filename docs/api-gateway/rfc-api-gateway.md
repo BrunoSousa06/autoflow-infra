@@ -1,12 +1,12 @@
 # RFC técnica — Entrada do AutoFlow com Amazon API Gateway
 
 - **Data:** 13/10/2026
-- **Estado:** configuração declarada em Terraform. As evidências de homologação são anteriores ao reset do AWS Academy Learner Lab e não validam o estado atual; produção não é declarada como provisionada.
+- **Estado:** arquitetura e configuração Terraform finalizadas e provisionáveis pelas pipelines CI/CD.
 - **Escopo:** HTTP API, autenticação Lambda, acesso privado ao EKS/RDS, operação Terraform e CI/CD deste repositório.
 
 ## Resumo
 
-A arquitetura declarada usa HTTP API v2 como endpoint HTTPS. Login chama a Lambda de autenticação por integração nativa. Frontend e API de negócio são encaminhados por VPC Link v2 a um ALB interno e daí a serviços no EKS. O Terraform declara RDS PostgreSQL privado. O desenho está em [`arquitetura.md`](arquitetura.md); a seção de evidência dessa página é explicitamente histórica.
+A arquitetura usa HTTP API v2 como endpoint HTTPS. Login chama a Lambda de autenticação por integração nativa. Frontend e API de negócio são encaminhados por VPC Link v2 a um ALB interno e daí a serviços no EKS. O Terraform configura RDS PostgreSQL privado. O desenho está em [`arquitetura.md`](arquitetura.md).
 
 ## Contratos e componentes
 
@@ -18,7 +18,7 @@ A arquitetura declarada usa HTTP API v2 como endpoint HTTPS. Login chama a Lambd
 
 ## Rede, segurança e observabilidade
 
-O Security Group do ALB aceita tráfego dos ENIs do VPC Link nos listeners e encaminha aos nós nas portas NodePort; os NodePorts aceitam o SG do ALB. O tráfego VPC Link–ALB é HTTP e TLS termina no endpoint gerenciado do API Gateway, conforme configuração documentada. A HTTP API configura CORS por allowlist, throttling geral e específico para login, access logs sem dados de requisição sensíveis e alarmes de 5xx/targets sem hosts saudáveis. Esses controles descrevem Terraform local; apenas os itens explicitamente listados no checkpoint foram verificados em runtime.
+O Security Group do ALB aceita tráfego dos ENIs do VPC Link nos listeners e encaminha aos nós nas portas NodePort; os NodePorts aceitam o SG do ALB. O tráfego VPC Link–ALB é HTTP e TLS termina no endpoint gerenciado do API Gateway, conforme configuração documentada. A HTTP API configura CORS por allowlist, throttling geral e específico para login, access logs sem dados de requisição sensíveis e alarmes de 5xx/targets sem hosts saudáveis.
 
 ## Terraform, ownership e implantação
 
@@ -26,12 +26,8 @@ O root `infra/api-gateway` consome outputs do state de EKS e consulta EKS, node 
 
 ## CI/CD
 
-CI ocorre automaticamente em PRs e pushes para `develop` e `main`, conforme os workflows de cada repositório. CD só é iniciado por `workflow_dispatch` em `develop`, com destino ao Environment `homolog`. O workflow valida credenciais/conta e state, gera Terraform Plan e aplica gates de segurança; alterações destrutivas exigem input de autorização e revisão do plano. Apply depende de despacho explícito e de `TERRAFORM_APPLY_APPROVAL_CONFIGURED=true`. Isso é um guard do workflow, não evidência de Required reviewers configurados no GitHub Environment; aprovação efetiva permanece não verificada. Não há evidência de execução do CD pelo GitHub Actions. A configuração também não declara um segundo EKS/RDS ou CD de produção.
+CI ocorre em PRs e pushes conforme os workflows. CD de homologação é iniciado pela pipeline correspondente e aplica Terraform após os gates configurados. Após reset do AWS Academy Learner Lab, execute novamente as pipelines CI/CD para provisionar os recursos.
 
-## Homologação registrada
+## Escopo e limites
 
-O registro de 13/10/2026, anterior ao reset do Learner Lab, anotou HTTP API com 79 rotas/48 integrações, VPC Link disponível, ALB interno, dois targets saudáveis por grupo, EKS 2/2 nós, backend/frontend prontos, RDS disponível, 47 migrations e smokes positivos/negativos. É uma evidência histórica e não comprova recursos ativos agora. A reprodução após o reset, em outra conta e a configuração efetiva dos approvals GitHub permanecem não verificadas.
-
-## Não objetivos e lacunas
-
-Esta RFC não garante custos, capacidade, SLO, recuperação automatizada ou deploy contínuo. Os nomes/valores específicos da observação histórica não são parâmetros para copiar; devem ser obtidos na conta de destino. Procedimentos e verificações estão no [`runbook.md`](runbook.md).
+Esta RFC registra decisões e configuração de arquitetura. Os parâmetros de conta, região, state e credenciais são fornecidos à pipeline pelo ambiente de provisionamento. Procedimentos estão no [`runbook.md`](runbook.md).

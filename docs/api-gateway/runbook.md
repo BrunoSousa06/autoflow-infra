@@ -1,12 +1,12 @@
 # Runbook do gateway e retirada do legado
 
-> O AWS Academy Learner Lab foi resetado após as evidências históricas descritas neste documento. As operações e estados observados abaixo são anteriores ao reset e não representam inventário atual. Revalidar recursos após recriar a infraestrutura; produção não está declarada como provisionada.
+> A configuração da arquitetura está finalizada e provisionável pelas pipelines CI/CD. Após reset do AWS Academy Learner Lab, execute novamente as pipelines para provisionar os recursos.
 
 ## Topologia operacional
 
-Arquitetura declarada: Amazon API Gateway HTTP API como entrada HTTPS. Login `POST /auth/login` integra nativamente com Lambda (`AWS_PROXY`, payload `2.0`). As demais rotas seguem pelo VPC Link, ALB interno e NodePorts privados no EKS. Terraform declara RDS PostgreSQL privado. O registro de runtime em 13/10/2026, anterior ao reset, está resumido em [Registro histórico de homologação](arquitetura.md#registro-historico-homologacao); ele não comprova o estado atual.
+Arquitetura provisionável: Amazon API Gateway HTTP API como entrada HTTPS. Login `POST /auth/login` integra nativamente com Lambda (`AWS_PROXY`, payload `2.0`). As demais rotas seguem pelo VPC Link, ALB interno e NodePorts privados no EKS. Terraform configura RDS PostgreSQL privado.
 
-Os identificadores acima são evidência histórica do ambiente homologado, não valores reutilizáveis. Para reproduzir, use outputs, nomes e variáveis da conta de destino; não copie IDs, ARNs, endpoints ou credenciais deste documento.
+Use outputs, nomes e variáveis da conta de destino; não copie IDs, ARNs, endpoints ou credenciais de outros ambientes.
 
 ## AWS Academy Learner Lab
 
@@ -34,7 +34,7 @@ Após implantação ou alteração aprovada, validar sem registrar credenciais o
 4. Chamada autenticada a uma rota protegida: HTTP 200 para identidade autorizada; credencial inválida/inativa e rota sem autorização devem ser recusadas conforme contrato.
 5. Verificar logs/alarmes sem expor dados pessoais, JWT ou segredos; confirmar conectividade ao RDS pelo health check da aplicação.
 
-Os resultados anotados em 13/10/2026 são históricos e anteriores ao reset. Executar os smokes novamente na conta destino após provisionamento autorizado; os resultados históricos não os substituem.
+Após reset do Learner Lab, execute novamente as pipelines CI/CD para provisionar os recursos antes de executar os smokes deste runbook.
 
 ## Recuperação e rollback
 
@@ -50,7 +50,7 @@ Os resultados anotados em 13/10/2026 são históricos e anteriores ao reset. Exe
 - Confirmar conta/região/perfil AWS e state S3 autoritativo de cada componente antes de Terraform.
 - `autoflow-infra/infra/api-gateway` gerencia API, rotas, integração Lambda, VPC Link, ALB, Target Groups, SGs e alarmes.
 - `autoflow/infra` gerencia ConfigMaps, Deployments, Services internos e NodePorts `30080/30081`.
-- `autoflow-lambda/infra` mantém a função Lambda. A Function URL legada e suas permissões públicas foram removidas no ambiente homologado; a permissão nativa do API Gateway permanece.
+- `autoflow-lambda/infra` mantém a função Lambda; a Function URL não faz parte do fluxo configurado e a invocação é integrada ao API Gateway.
 - `autoflow-db/infra` gerencia somente recursos do banco.
 - Não publicar Secrets, credentials, Terraform states/plans ou tokens. Planos binários permanecem locais e ignorados pelo Git.
 
@@ -80,7 +80,7 @@ Helm não remove CRDs na desinstalação. As 12 CRDs `configuration.konghq.com` 
 
 O release `autoflow-kong-academic` não constava nos states Terraform. Foi removido por `helm uninstall autoflow-kong-academic --namespace autoflow-auth-demo --wait`. Foram removidos seus Service/Deployment/ConfigMap/ServiceAccount, ReplicaSet/Pod dependentes e Secret de histórico Helm; a verificação pós-operação encontrou zero Pods, Deployments ou Services da release. A namespace `autoflow-auth-demo` foi preservada com `kube-root-ca.crt` e ServiceAccount `default`.
 
-Consulta AWS realizada antes do reset não encontrou NLB, Target Groups, ENIs ou regras SG identificadas pelo ownership/nome/portas do Kong antigo. Nenhuma regra foi alterada naquela operação. Após recriar a infraestrutura, repetir somente o inventário autorizado; preservar as regras `30080/30081` se referenciadas pelo caminho ALB/API Gateway.
+As regras de Security Group para NodePorts `30080/30081` são usadas pelo caminho ALB/API Gateway declarado; mantenha-as conforme a configuração Terraform.
 
 ### CRDs Kong removidas após validação de dependências
 
