@@ -1,6 +1,6 @@
 # Arquitetura final: AutoFlow com Amazon API Gateway
 
-**Data da evidência operacional:** 13/10/2026. **Status:** arquitetura declarada no Terraform e homologada somente no ambiente Learner Lab registrado em [progresso.md](progresso.md). Não há ambiente de produção implantado nesta arquitetura; segregação futura com segundo EKS/RDS permanece planejada. A configuração local, isoladamente, não comprova estado AWS.
+**Status:** arquitetura declarada no Terraform. O registro de homologação de 13/10/2026 é histórico, anterior ao reset do AWS Academy Learner Lab, e não comprova o estado atual da AWS. A existência atual dos recursos precisa ser validada após recriar a infraestrutura. Não há produção declarada como provisionada.
 
 Esta página consolida a arquitetura e os diagramas C4. A decisão arquitetural está registrada em [ADR-001](adr-001-api-gateway.md) e os detalhes de desenho/implantação em [RFC técnica](rfc-api-gateway.md).
 
@@ -13,9 +13,11 @@ Esta página consolida a arquitetura e os diagramas C4. A decisão arquitetural 
 5. Lambda e backend acessam o RDS PostgreSQL privado. O JWT HS256 emitido pela Lambda é validado pelo backend; perfis e estado do cliente são verificados no domínio.
 6. A Function URL não participa do caminho de tráfego e foi removida por Terraform. A permissão de invocação nativa da HTTP API permanece; a Lambda não depende de Function URL.
 
-## Evidência em homologação
+## Registro histórico de homologação — 13/10/2026, antes do reset
 
-API `4ct2k9m5l8`, stage `$default`, 79 rotas e 48 integrações. VPC Link `cjhmlk` `AVAILABLE`; ALB `autoflow-homolog-private` `active/internal`. Target Groups backend/frontend: 2/2 `healthy`. RDS disponível, backend `db:UP`, 47 migrations Flyway validadas e schema atualizado. Login válido de cliente seed, emissão de JWT e consulta autenticada pelo backend retornaram HTTP 200. Smokes de autenticação negativa, CORS não autorizado, assets e deep links também passaram.
+<a id="registro-historico-homologacao"></a>
+
+O registro histórico anotou API Gateway HTTP API, stage `$default`, 79 rotas e 48 integrações; VPC Link disponível; ALB interno; Target Groups backend/frontend com 2/2 targets saudáveis; RDS disponível; backend `db:UP`; 47 migrations Flyway validadas; e smokes positivos/negativos. Esses dados descrevem somente a observação anterior ao reset e não devem ser interpretados como inventário ou validação atual.
 
 Essas evidências descrevem o ambiente verificado em 13/10/2026; não substituem validação em outra conta ou região.
 
@@ -64,14 +66,25 @@ flowchart LR
     FILTER[Filtro JWT e autorização de domínio]
   end
   DB[(RDS PostgreSQL privado)]
+  subgraph NR[New Relic SaaS — configuração declarada por Terraform]
+    K8S[Integração Kubernetes e Fluent Bit]
+    APM[APM do backend]
+    DASH[Dashboards e condições de alerta]
+    SYNTH[Synthetic uptime, quando configurado]
+    K8S --> DASH
+    APM --> DASH
+  end
   LOGIN --> VALIDATE --> CLIENT --> DB
   CLIENT --> ISSUE
   BUSINESS --> SPRING --> FILTER
   STATIC --> NGINX
   FILTER -->|validar assinatura e carregar perfil| DB
+  EKS -.->|métricas e logs, se habilitado| K8S
+  SPRING -.->|telemetria APM, se habilitada| APM
+  SYNTH -.->|verificação da URL configurada| API
 ```
 
-O contrato atualmente documentado pela Lambda usa `cpf_cnpj` e `senha`. O diagrama não implica que o API Gateway valide JWT: a validação e autorização de domínio das rotas protegidas são feitas pelo backend Spring Boot.
+O contrato atualmente documentado pela Lambda usa `cpf_cnpj` e `senha`. O diagrama não implica que o API Gateway valide JWT: a validação e autorização de domínio das rotas protegidas são feitas pelo backend Spring Boot. New Relic, integração Kubernetes, APM, dashboards, alertas e Synthetic são configurações declaradas; sua existência ou ingestão atual não foi verificada após o reset do Learner Lab.
 
 ## Sequências de comunicação
 
@@ -215,4 +228,4 @@ Os plans aprovados removeram os Ingresses/recursos Kong antigos e a release Helm
 
 Helm não remove automaticamente CRDs durante `helm uninstall`. No ambiente homologado, as CRDs foram verificadas sem objetos customizados e removidas; a instalação acadêmica separada também foi desinstalada. A consulta posterior não encontrou recursos AWS residuais exclusivos do Kong nem regras candidatas. Em outra conta, repetir inventário e aprovação antes de qualquer limpeza.
 
-Não aplicar plans de destruição antes da aprovação. A ordem e os comandos de revisão estão no [runbook](runbook.md) e as evidências do checkpoint em [progresso](progresso.md).
+Não aplicar plans de destruição antes da aprovação. A ordem e os comandos de revisão estão no [runbook](runbook.md); o registro histórico anterior ao reset está descrito nesta página em [Registro histórico de homologação](#registro-historico-homologacao).

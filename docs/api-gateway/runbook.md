@@ -1,8 +1,10 @@
 # Runbook do gateway e retirada do legado
 
+> O AWS Academy Learner Lab foi resetado após as evidências históricas descritas neste documento. As operações e estados observados abaixo são anteriores ao reset e não representam inventário atual. Revalidar recursos após recriar a infraestrutura; produção não está declarada como provisionada.
+
 ## Topologia operacional
 
-Entrada pública HTTPS: Amazon API Gateway HTTP API. Login `POST /auth/login` integra nativamente com Lambda (`AWS_PROXY`, payload `2.0`). As demais rotas seguem pelo VPC Link, ALB interno e NodePorts privados no EKS. RDS PostgreSQL permanece privado. Frontend, backend, NodePorts e API Gateway foram homologados em 13/10/2026; consulte o [checkpoint](progresso.md).
+Arquitetura declarada: Amazon API Gateway HTTP API como entrada HTTPS. Login `POST /auth/login` integra nativamente com Lambda (`AWS_PROXY`, payload `2.0`). As demais rotas seguem pelo VPC Link, ALB interno e NodePorts privados no EKS. Terraform declara RDS PostgreSQL privado. O registro de runtime em 13/10/2026, anterior ao reset, está resumido em [Registro histórico de homologação](arquitetura.md#registro-historico-homologacao); ele não comprova o estado atual.
 
 Os identificadores acima são evidência histórica do ambiente homologado, não valores reutilizáveis. Para reproduzir, use outputs, nomes e variáveis da conta de destino; não copie IDs, ARNs, endpoints ou credenciais deste documento.
 
@@ -32,7 +34,7 @@ Após implantação ou alteração aprovada, validar sem registrar credenciais o
 4. Chamada autenticada a uma rota protegida: HTTP 200 para identidade autorizada; credencial inválida/inativa e rota sem autorização devem ser recusadas conforme contrato.
 5. Verificar logs/alarmes sem expor dados pessoais, JWT ou segredos; confirmar conectividade ao RDS pelo health check da aplicação.
 
-Os códigos e resultados homologados em 13/10/2026 estão no checkpoint. Executar os smokes de novo na conta destino; os resultados históricos não os substituem.
+Os resultados anotados em 13/10/2026 são históricos e anteriores ao reset. Executar os smokes novamente na conta destino após provisionamento autorizado; os resultados históricos não os substituem.
 
 ## Recuperação e rollback
 
@@ -78,7 +80,7 @@ Helm não remove CRDs na desinstalação. As 12 CRDs `configuration.konghq.com` 
 
 O release `autoflow-kong-academic` não constava nos states Terraform. Foi removido por `helm uninstall autoflow-kong-academic --namespace autoflow-auth-demo --wait`. Foram removidos seus Service/Deployment/ConfigMap/ServiceAccount, ReplicaSet/Pod dependentes e Secret de histórico Helm; a verificação pós-operação encontrou zero Pods, Deployments ou Services da release. A namespace `autoflow-auth-demo` foi preservada com `kube-root-ca.crt` e ServiceAccount `default`.
 
-Consulta AWS após a remoção não encontrou NLB, Target Groups, ENIs ou regras SG identificadas pelo ownership/nome/portas do Kong antigo. Nenhuma regra foi alterada. Preservar as regras `30080/30081` usadas pelo caminho ALB/API Gateway.
+Consulta AWS realizada antes do reset não encontrou NLB, Target Groups, ENIs ou regras SG identificadas pelo ownership/nome/portas do Kong antigo. Nenhuma regra foi alterada naquela operação. Após recriar a infraestrutura, repetir somente o inventário autorizado; preservar as regras `30080/30081` se referenciadas pelo caminho ALB/API Gateway.
 
 ### CRDs Kong removidas após validação de dependências
 

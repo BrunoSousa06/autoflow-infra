@@ -1,12 +1,12 @@
 # ADR-001 — Substituição do Kong pelo Amazon API Gateway
 
 - **Data:** 13/10/2026
-- **Status:** Aceita e homologada no ambiente Learner Lab
+- **Status:** Aceita; configuração declarada. A homologação registrada é anterior ao reset do Learner Lab.
 - **Decisores:** Não registrado nos artefatos consultados
 
 ## Contexto
 
-A arquitetura anterior usava Kong no EKS como entrada para login, frontend e API. A configuração local da branch `feature/api-gateway` remove o Kong do caminho operacional; a evidência registrada em [`progresso.md`](progresso.md) confirma a retirada do runtime e a validação da nova entrada no ambiente homologado. A homologação não prova disponibilidade ou configuração equivalente em outras contas.
+A arquitetura anterior usava Kong no EKS como entrada para login, frontend e API. A configuração atual declara Amazon API Gateway HTTP API v2 como entrada e não declara Kong como gateway operacional. O registro de homologação de 13/10/2026 é anterior ao reset do Learner Lab; ele não confirma a disponibilidade atual dos recursos. Consulte a seção [Registro histórico de homologação](arquitetura.md#registro-historico-homologacao).
 
 ## Decisão
 
@@ -28,4 +28,4 @@ Adotar Amazon API Gateway HTTP API v2 como entrada pública única. `POST /auth/
 
 ## Evidência e lacunas
 
-Em 13/10/2026 foram registrados HTTP API/stage, VPC Link disponível, ALB interno ativo, targets saudáveis, login, emissão de JWT, consulta protegida e frontend aprovados. Ver [`progresso.md`](progresso.md) para o recorte e os limites dessa evidência. Custos comparativos, SLOs e decisão formal com nomes dos aprovadores não constam nos documentos disponíveis.
+Em 13/10/2026 foram registrados HTTP API/stage, VPC Link disponível, ALB interno ativo, targets saudáveis, login, emissão de JWT, consulta protegida e frontend aprovados. Essa observação é histórica e não comprova runtime atual. Custos comparativos, SLOs e decisão formal com nomes dos aprovadores não constam nos documentos disponíveis.

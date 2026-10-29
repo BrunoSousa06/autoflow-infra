@@ -1,12 +1,12 @@
 # RFC técnica — Entrada do AutoFlow com Amazon API Gateway
 
 - **Data:** 13/10/2026
-- **Estado:** configuração Terraform declarada e homologada somente no ambiente AWS Academy Learner Lab documentado; nenhuma implantação em produção é declarada e reprodução em outra conta não presumida.
+- **Estado:** configuração declarada em Terraform. As evidências de homologação são anteriores ao reset do AWS Academy Learner Lab e não validam o estado atual; produção não é declarada como provisionada.
 - **Escopo:** HTTP API, autenticação Lambda, acesso privado ao EKS/RDS, operação Terraform e CI/CD deste repositório.
 
 ## Resumo
 
-A solução usa HTTP API v2 como endpoint HTTPS. Login chama a Lambda de autenticação por integração nativa. Frontend e API de negócio são encaminhados por VPC Link v2 a um ALB interno e daí a serviços no EKS. RDS PostgreSQL permanece privado. A arquitetura e evidências estão detalhadas em [`arquitetura.md`](arquitetura.md) e [`progresso.md`](progresso.md).
+A arquitetura declarada usa HTTP API v2 como endpoint HTTPS. Login chama a Lambda de autenticação por integração nativa. Frontend e API de negócio são encaminhados por VPC Link v2 a um ALB interno e daí a serviços no EKS. O Terraform declara RDS PostgreSQL privado. O desenho está em [`arquitetura.md`](arquitetura.md); a seção de evidência dessa página é explicitamente histórica.
 
 ## Contratos e componentes
 
@@ -30,8 +30,8 @@ CI ocorre automaticamente em PRs e pushes para `develop` e `main`, conforme os w
 
 ## Homologação registrada
 
-O checkpoint de 13/10/2026 registra HTTP API com 79 rotas/48 integrações, VPC Link disponível, ALB interno, dois targets saudáveis por grupo, EKS 2/2 nós, backend/frontend prontos, RDS disponível, 47 migrations e smokes positivos/negativos. A validação positiva posterior ao fechamento da Function URL está registrada. Não há comprovação de reprodução em segunda conta nem de configuração atual dos approvals GitHub.
+O registro de 13/10/2026, anterior ao reset do Learner Lab, anotou HTTP API com 79 rotas/48 integrações, VPC Link disponível, ALB interno, dois targets saudáveis por grupo, EKS 2/2 nós, backend/frontend prontos, RDS disponível, 47 migrations e smokes positivos/negativos. É uma evidência histórica e não comprova recursos ativos agora. A reprodução após o reset, em outra conta e a configuração efetiva dos approvals GitHub permanecem não verificadas.
 
 ## Não objetivos e lacunas
 
-Esta RFC não declara requisito oficial além do que consta na fonte disponível, nem garante custos, capacidade, SLO, recuperação automatizada ou deploy contínuo. Os nomes/valores específicos do ambiente homologado não são parâmetros para copiar; devem ser obtidos na conta de destino. Consultar também a matriz de pendências em [`progresso.md`](progresso.md).
+Esta RFC não garante custos, capacidade, SLO, recuperação automatizada ou deploy contínuo. Os nomes/valores específicos da observação histórica não são parâmetros para copiar; devem ser obtidos na conta de destino. Procedimentos e verificações estão no [`runbook.md`](runbook.md).

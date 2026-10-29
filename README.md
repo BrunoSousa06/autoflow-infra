@@ -6,6 +6,8 @@ Este repositório declara a infraestrutura AWS do AutoFlow com Terraform. A arqu
 
 Leia na ordem: [arquitetura e diagramas C4](docs/api-gateway/arquitetura.md), [ADR-001](docs/api-gateway/adr-001-api-gateway.md), [RFC técnica](docs/api-gateway/rfc-api-gateway.md), [runbook operacional](docs/api-gateway/runbook.md). O [README do root Terraform](infra/api-gateway/README.md) contém validações locais.
 
+O contrato central da aplicação está no [OpenAPI e guia da API](https://github.com/BrunoSousa06/autoflow/blob/develop/docs/openapi/README.md); a [coleção Postman de autenticação CPF/JWT](https://github.com/BrunoSousa06/autoflow/blob/develop/backend/postman/autoflow-serverless-auth.postman_collection.json) também é mantida no repositório da aplicação.
+
 Após reset do Learner Lab, consulte o [catálogo de variables e secrets](docs/variables-and-secrets.md): configure bucket/keys do Terraform State, região, conta esperada, três roles IAM distintas e credenciais temporárias AWS. Cluster, node group e Lambda são verificados/descobertos por AWS; não configure nomes manuais desses recursos.
 
 Para investigar nós EC2 que não registram no Kubernetes, consulte o [runbook de diagnóstico e recuperação EKS](docs/eks-node-recovery.md). O procedimento é somente leitura até a seção explícita de recuperação manual; não há reboot automatizado.
@@ -14,7 +16,7 @@ O root `infra/` e o workflow `Pipeline` gerenciam somente VPC/EKS. New Relic tem
 
 Para reconstruir VPC/EKS após reset do Learner Lab, siga o [runbook de primeiro provisionamento EKS](docs/eks-primeiro-provisionamento.md); depois sincronize a License Key pelo pipeline da aplicação e execute `New Relic Pipeline` uma vez. Para ambiente com objetos New Relic preexistentes, siga o [runbook de migração de state](docs/newrelic-state-migration.md), sem executar migração em deploy normal.
 
-A prova local de orquestração segura `autoflow-infra` → `autoflow-lambda`, seus pré-requisitos GitHub e limitações estão registrados no [plano da reconstrução](docs/specs/reconstrucao-learner-lab/plano-implementacao.md).
+A sequência de reconstrução e os limites dos procedimentos estão documentados no [runbook de primeiro provisionamento EKS](docs/eks-primeiro-provisionamento.md) e no [runbook do API Gateway](docs/api-gateway/runbook.md).
 
 Para diagnóstico dos nós EKS, consulte o [runbook](docs/eks-node-recovery.md). O provisionamento da EC2 runner está descrito em [Runner privado do GitHub Actions](docs/github-runner.md).
 
