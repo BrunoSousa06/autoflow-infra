@@ -25,7 +25,3 @@ Adotar Amazon API Gateway HTTP API v2 como entrada pública única. `POST /auth/
 - A autorização de domínio continua no Spring Boot; o API Gateway não substitui a consulta de perfil/estado.
 - O state do gateway é separado dos states de plataforma, aplicação, RDS e Lambda. Mudanças destrutivas exigem revisão de plano e aprovação operacional.
 - A reversão ao Kong não é automática após sua retirada e requer reimplantação explícita, infraestrutura e aprovação.
-
-## Evidência e lacunas
-
-Em 13/10/2026 foram registrados HTTP API/stage, VPC Link disponível, ALB interno ativo, targets saudáveis, login, emissão de JWT, consulta protegida e frontend aprovados. Essa observação é histórica e não comprova runtime atual. Custos comparativos, SLOs e decisão formal com nomes dos aprovadores não constam nos documentos disponíveis.
