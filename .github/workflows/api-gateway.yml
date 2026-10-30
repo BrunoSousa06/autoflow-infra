@@ -51,6 +51,7 @@ jobs:
         run: python -m unittest discover -s scripts -p test_gateway_routes.py -v
       - name: Testar imports do VPC Link sem State
         run: python -m unittest discover -s scripts -p test_prepare_gateway_imports.py -v
+      - run: python -m unittest discover -s scripts -p test_github_environment_guards.py -v
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.16.5"
@@ -74,15 +75,18 @@ jobs:
       GITHUB_DEPLOYMENT_ENVIRONMENT: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
       AWS_REGION: ${{ vars.AWS_REGION }}
       AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
+      AWS_TERRAFORM_STATE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       TF_VAR_aws_region: ${{ vars.AWS_REGION }}
       TF_VAR_expected_account_id: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
       TF_VAR_environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
       TF_VAR_lambda_function_name: autoflow-cpf-validator-${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
       TF_VAR_terraform_state_bucket: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       TF_VAR_infra_state_key: ${{ vars.AWS_TF_STATE_KEY_INFRA }}
+      AWS_TF_STATE_KEY_INFRA: ${{ vars.AWS_TF_STATE_KEY_INFRA }}
       TF_VAR_enable_detailed_gateway_metrics: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_detailed_gateway_metrics && 'true' || 'false' }}
       TF_VAR_cors_origins: ${{ vars.API_GATEWAY_CORS_ORIGINS }}
       TF_STATE_KEY: ${{ vars.AWS_TF_STATE_KEY_GATEWAY }}
+      AWS_TF_STATE_KEY_GATEWAY: ${{ vars.AWS_TF_STATE_KEY_GATEWAY }}
       AWS_TF_STATE_KEY_NEWRELIC: ${{ vars.AWS_TF_STATE_KEY_NEWRELIC }}
       EKS_PROJECT_NAME: ${{ github.ref == 'refs/heads/main' && 'autoflow-production' || 'autoflow' }}
       EKS_CLUSTER_NAME: eks-${{ github.ref == 'refs/heads/main' && 'autoflow-production' || 'autoflow' }}
@@ -97,38 +101,25 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
           API_GATEWAY_CORS_ORIGINS: ${{ vars.API_GATEWAY_CORS_ORIGINS }}
-          GH_TOKEN: ${{ github.token }}
-          APPROVAL_CONFIGURED: ${{ vars.TERRAFORM_APPLY_APPROVAL_CONFIGURED }}
+          TERRAFORM_APPLY_APPROVAL_CONFIGURED: ${{ vars.TERRAFORM_APPLY_APPROVAL_CONFIGURED }}
         shell: bash
         run: |
           set -euo pipefail
-          VARIABLE_NAMES=$(gh api --paginate "repos/$GITHUB_REPOSITORY/environments/$GITHUB_DEPLOYMENT_ENVIRONMENT/variables?per_page=30" --jq '.variables[].name')
-          for name in AWS_REGION AWS_EXPECTED_ACCOUNT_ID AWS_TERRAFORM_STATE_BUCKET AWS_TF_STATE_KEY_GATEWAY AWS_TF_STATE_KEY_INFRA AWS_TF_STATE_KEY_NEWRELIC API_GATEWAY_CORS_ORIGINS TERRAFORM_APPLY_APPROVAL_CONFIGURED; do
-            grep -Fxq -- "$name" <<< "$VARIABLE_NAMES" || { echo "A Variable $name precisa estar cadastrada no GitHub Environment selecionado." >&2; exit 1; }
-          done
-          SECRET_NAMES=$(gh api --paginate "repos/$GITHUB_REPOSITORY/environments/$GITHUB_DEPLOYMENT_ENVIRONMENT/secrets?per_page=100" --jq '.secrets[].name')
-          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; do
-            grep -Fxq -- "$name" <<< "$SECRET_NAMES" || { echo "O Secret $name precisa estar cadastrado no GitHub Environment selecionado." >&2; exit 1; }
-          done
-          test -n "$AWS_ACCESS_KEY_ID"
-          test -n "$AWS_SECRET_ACCESS_KEY"
-          test -n "$AWS_SESSION_TOKEN"
-          [[ "$AWS_REGION" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$ ]]
-          [[ "$TF_VAR_expected_account_id" =~ ^[0-9]{12}$ ]]
-          test -n "$TF_STATE_KEY"
-          [[ "$TF_STATE_KEY" == "$GITHUB_DEPLOYMENT_ENVIRONMENT/"* ]]
-          test -n "$TF_VAR_terraform_state_bucket"
-          test -n "$TF_VAR_infra_state_key"
-          [[ "$TF_VAR_infra_state_key" == "$GITHUB_DEPLOYMENT_ENVIRONMENT/"* ]]
-          test -n "$AWS_TF_STATE_KEY_NEWRELIC"
-          [[ "$AWS_TF_STATE_KEY_NEWRELIC" == "$GITHUB_DEPLOYMENT_ENVIRONMENT/"* ]]
-          test "$TF_STATE_KEY" != "$TF_VAR_infra_state_key"
-          test "$TF_STATE_KEY" != "$AWS_TF_STATE_KEY_NEWRELIC"
-          test -n "$API_GATEWAY_CORS_ORIGINS"
+          python scripts/validate_github_environment.py \
+            --environment "$GITHUB_DEPLOYMENT_ENVIRONMENT" \
+            --variable AWS_TF_STATE_KEY_GATEWAY \
+            --variable AWS_TF_STATE_KEY_INFRA \
+            --variable AWS_TF_STATE_KEY_NEWRELIC \
+            --variable API_GATEWAY_CORS_ORIGINS \
+            --variable TERRAFORM_APPLY_APPROVAL_CONFIGURED \
+            --secret AWS_ACCESS_KEY_ID \
+            --secret AWS_SECRET_ACCESS_KEY \
+            --secret AWS_SESSION_TOKEN \
+            --state-key AWS_TF_STATE_KEY_GATEWAY \
+            --state-key AWS_TF_STATE_KEY_INFRA \
+            --state-key AWS_TF_STATE_KEY_NEWRELIC \
+            --approval-gate
           python -c 'import json,os,sys; value=json.loads(os.environ["API_GATEWAY_CORS_ORIGINS"]); sys.exit(not isinstance(value,list))'
-          test "$APPROVAL_CONFIGURED" = true
-          REVIEWERS=$(gh api "repos/$GITHUB_REPOSITORY/environments/$GITHUB_DEPLOYMENT_ENVIRONMENT" --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length')
-          test "$REVIEWERS" -gt 0
       - name: Registrar fingerprint do Environment, backend e recursos do Gateway
         run: python scripts/terraform_deployment_fingerprint.py api-gateway create infra/api-gateway/gateway-deployment-config.sha256
       - uses: aws-actions/configure-aws-credentials@v4
@@ -231,10 +222,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
-      - name: Exigir aprovação efetiva configurada no environment
+      - name: Validar configuração de aprovação no Environment
         env:
-          APPROVAL_CONFIGURED: ${{ vars.TERRAFORM_APPLY_APPROVAL_CONFIGURED }}
-          GH_TOKEN: ${{ github.token }}
+          TERRAFORM_APPLY_APPROVAL_CONFIGURED: ${{ vars.TERRAFORM_APPLY_APPROVAL_CONFIGURED }}
           AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
           AWS_REGION: ${{ vars.AWS_REGION }}
           AWS_TERRAFORM_STATE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
@@ -242,34 +232,26 @@ jobs:
           AWS_TF_STATE_KEY_INFRA: ${{ vars.AWS_TF_STATE_KEY_INFRA }}
           AWS_TF_STATE_KEY_NEWRELIC: ${{ vars.AWS_TF_STATE_KEY_NEWRELIC }}
           API_GATEWAY_CORS_ORIGINS: ${{ vars.API_GATEWAY_CORS_ORIGINS }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
         run: |
           set -euo pipefail
-          VARIABLE_NAMES=$(gh api --paginate "repos/$GITHUB_REPOSITORY/environments/$GITHUB_DEPLOYMENT_ENVIRONMENT/variables?per_page=30" --jq '.variables[].name')
-          for name in AWS_REGION AWS_EXPECTED_ACCOUNT_ID AWS_TERRAFORM_STATE_BUCKET AWS_TF_STATE_KEY_GATEWAY AWS_TF_STATE_KEY_INFRA AWS_TF_STATE_KEY_NEWRELIC API_GATEWAY_CORS_ORIGINS TERRAFORM_APPLY_APPROVAL_CONFIGURED; do
-            grep -Fxq -- "$name" <<< "$VARIABLE_NAMES" || { echo "A Variable $name precisa estar cadastrada no GitHub Environment selecionado." >&2; exit 1; }
-          done
-          SECRET_NAMES=$(gh api --paginate "repos/$GITHUB_REPOSITORY/environments/$GITHUB_DEPLOYMENT_ENVIRONMENT/secrets?per_page=100" --jq '.secrets[].name')
-          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; do
-            grep -Fxq -- "$name" <<< "$SECRET_NAMES" || { echo "O Secret $name precisa estar cadastrado no GitHub Environment selecionado." >&2; exit 1; }
-          done
-          test "$APPROVAL_CONFIGURED" = "true" || {
-            echo "Configure Required reviewers no environment $GITHUB_DEPLOYMENT_ENVIRONMENT e defina TERRAFORM_APPLY_APPROVAL_CONFIGURED=true." >&2
-            exit 1
-          }
-          REVIEWERS=$(gh api "repos/$GITHUB_REPOSITORY/environments/$GITHUB_DEPLOYMENT_ENVIRONMENT" --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length')
-          test "$REVIEWERS" -gt 0 || {
-            echo "O environment $GITHUB_DEPLOYMENT_ENVIRONMENT não possui Required reviewers efetivamente configurados; Apply bloqueado." >&2
-            exit 1
-          }
-          [[ "$AWS_EXPECTED_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]
-          [[ "$AWS_REGION" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$ ]]
-          test -n "$AWS_TERRAFORM_STATE_BUCKET"
-          [[ "$AWS_TF_STATE_KEY_GATEWAY" == "$GITHUB_DEPLOYMENT_ENVIRONMENT/"* ]]
-          [[ "$AWS_TF_STATE_KEY_INFRA" == "$GITHUB_DEPLOYMENT_ENVIRONMENT/"* ]]
-          [[ "$AWS_TF_STATE_KEY_NEWRELIC" == "$GITHUB_DEPLOYMENT_ENVIRONMENT/"* ]]
-          test "$AWS_TF_STATE_KEY_GATEWAY" != "$AWS_TF_STATE_KEY_INFRA"
-          test "$AWS_TF_STATE_KEY_GATEWAY" != "$AWS_TF_STATE_KEY_NEWRELIC"
-          test -n "$API_GATEWAY_CORS_ORIGINS"
+          python scripts/validate_github_environment.py \
+            --environment "$GITHUB_DEPLOYMENT_ENVIRONMENT" \
+            --variable AWS_TF_STATE_KEY_GATEWAY \
+            --variable AWS_TF_STATE_KEY_INFRA \
+            --variable AWS_TF_STATE_KEY_NEWRELIC \
+            --variable API_GATEWAY_CORS_ORIGINS \
+            --variable TERRAFORM_APPLY_APPROVAL_CONFIGURED \
+            --secret AWS_ACCESS_KEY_ID \
+            --secret AWS_SECRET_ACCESS_KEY \
+            --secret AWS_SESSION_TOKEN \
+            --state-key AWS_TF_STATE_KEY_GATEWAY \
+            --state-key AWS_TF_STATE_KEY_INFRA \
+            --state-key AWS_TF_STATE_KEY_NEWRELIC \
+            --approval-gate
+          python -c 'import json,os,sys; value=json.loads(os.environ["API_GATEWAY_CORS_ORIGINS"]); sys.exit(not isinstance(value,list))'
       - name: Exigir credenciais temporárias e configuração AWS
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}

@@ -42,19 +42,20 @@ class BootstrapWorkflowIsolationTests(unittest.TestCase):
         self.assertNotIn("APPROVE_CREATE", self.bootstrap)
         self.assertNotIn("resolve_state_bucket", self.bootstrap)
 
-    def test_required_reviewers_and_configuration_are_checked_before_aws_credentials(self):
-        guard_position = self.bootstrap.index("Validar configuração e proteção efetiva do Environment")
-        reviewers_position = self.bootstrap.index("required_reviewers")
+    def test_configuration_and_independent_approval_gate_are_checked_before_aws_credentials(self):
+        guard_position = self.bootstrap.index("Validar configuração obrigatória do Environment")
+        validator_position = self.bootstrap.index("scripts/validate_github_environment.py")
         credentials_position = self.bootstrap.index("aws-actions/configure-aws-credentials@v4")
         identity_position = self.bootstrap.index("python scripts/verify_aws_account.py")
         mutation_position = self.bootstrap.index("python scripts/bootstrap_state_bucket.py --approve-create")
 
-        self.assertIn("test \"$APPROVAL_CONFIGURED\" = true", self.bootstrap)
-        self.assertLess(guard_position, reviewers_position)
-        self.assertLess(reviewers_position, credentials_position)
+        self.assertIn("--approval-gate", self.bootstrap)
+        self.assertIn("--secret AWS_ACCESS_KEY_ID", self.bootstrap)
+        self.assertLess(guard_position, validator_position)
+        self.assertLess(validator_position, credentials_position)
         self.assertLess(credentials_position, identity_position)
         self.assertLess(identity_position, mutation_position)
-        self.assertIn("test \"$REVIEWERS\" -gt 0", self.bootstrap)
+        self.assertIn("environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}", self.bootstrap)
 
     def test_authorized_bootstrap_dispatch_skips_validation_plan_and_apply(self):
         self.assertIn("inputs.approve_state_bucket_creation != true", self.validate)

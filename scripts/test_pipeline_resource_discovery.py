@@ -71,8 +71,11 @@ class PipelineResourceDiscoveryTests(unittest.TestCase):
             with self.subTest(workflow=workflow_name):
                 workflow = (ROOT / ".github/workflows" / workflow_name).read_text(encoding="utf-8")
                 plan = workflow.split("\n  plan:", 1)[1].split("\n  apply:", 1)[0]
+                validator = (ROOT / "scripts/validate_github_environment.py").read_text(encoding="utf-8")
                 self.assertRegex(workflow, r"AWS_EXPECTED_ACCOUNT_ID: \$\{\{ vars\.AWS_EXPECTED_ACCOUNT_ID \}\}")
-                self.assertIn("[0-9]{12}", plan)
+                self.assertIn("AWS_ACCOUNT_ID_PATTERN", validator)
+                self.assertIn("--environment \"$GITHUB_DEPLOYMENT_ENVIRONMENT\"", plan)
+                self.assertIn("scripts/validate_github_environment.py", plan)
                 self.assertLess(plan.index(preflight_name), plan.index("aws-actions/configure-aws-credentials@v4"))
                 self.assertNotRegex(workflow, r"(?<!\d)\d{12}(?!\d)")
 
