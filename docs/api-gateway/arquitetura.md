@@ -76,7 +76,7 @@ flowchart LR
   SYNTH -.->|verificação da URL configurada| API
 ```
 
-O contrato atualmente documentado pela Lambda usa `cpf_cnpj` e `senha`. O diagrama não implica que o API Gateway valide JWT: a validação e autorização de domínio das rotas protegidas são feitas pelo backend Spring Boot. New Relic, integração Kubernetes, APM, dashboards, alertas e Synthetic são configurações declaradas; sua existência ou ingestão atual não foi verificada após o reset do Learner Lab.
+O contrato atualmente documentado pela Lambda usa `cpf_cnpj` e `senha`. O diagrama não implica que o API Gateway valide JWT: a validação e autorização de domínio das rotas protegidas são feitas pelo backend Spring Boot. New Relic, integração Kubernetes, APM, dashboards, alertas e Synthetic estão configurados para provisionamento pelos roots Terraform correspondentes. Após reset do Learner Lab, execute também a pipeline New Relic.
 
 ## Sequências de comunicação
 
@@ -167,7 +167,7 @@ flowchart TB
   DbSG -.-> RDS
 ```
 
-Terraform declara três subnets públicas e três privadas distribuídas em três AZs; ALB interno, VPC Link, EKS e RDS usam subnets privadas conforme seus roots. O diagrama representa configuração declarada e não inventário atual. O SG do ALB permite o SG do VPC Link nos listeners 8080/8081 e saída ao SG dos nodes nas portas 30080/30081; os NodePorts aceitam tráfego somente do SG do ALB. O SG do RDS permite PostgreSQL às origens configuradas no root do banco. O tráfego privado VPC Link–ALB usa HTTP; TLS termina no endpoint gerenciado do API Gateway.
+Terraform declara três subnets públicas e três privadas distribuídas em três AZs; ALB interno, VPC Link, EKS e RDS usam subnets privadas conforme seus roots. O SG do ALB permite o SG do VPC Link nos listeners 8080/8081 e saída ao SG dos nodes nas portas 30080/30081; os NodePorts aceitam tráfego somente do SG do ALB. O SG do RDS permite PostgreSQL às origens configuradas no root do banco. O tráfego privado VPC Link–ALB usa HTTP; TLS termina no endpoint gerenciado do API Gateway. Após reset do Learner Lab, reexecute as pipelines CI/CD para provisionar essa topologia.
 
 ## Rotas e autorização
 

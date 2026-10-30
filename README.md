@@ -44,7 +44,7 @@ O navegador usa a mesma origem HTTPS para frontend e API. O API Gateway invoca a
 
 ## Ordem de implantação
 
-Implante ou confirme dependências nesta ordem, respeitando os states e owners existentes: (1) VPC/EKS e rede; (2) RDS e conectividade privada; (3) função Lambda e configuração segura; (4) aplicação no EKS (Services e NodePorts esperados pelo ALB); (5) API Gateway, VPC Link e ALB interno; (6) smoke tests ponta a ponta. Esta ordem decorre das dependências declaradas nos Terraform; não representa uma execução comprovada em conta nova. O procedimento detalhado e as condições de reprodução estão no [runbook](docs/api-gateway/runbook.md).
+Após reset do Learner Lab, reexecute as pipelines CI/CD na ordem de dependências: (1) VPC/EKS e rede; (2) RDS e conectividade privada; (3) Lambda; (4) API Gateway, VPC Link e ALB interno; (5) aplicação no EKS; (6) New Relic; (7) smoke tests ponta a ponta. O procedimento está no [runbook](docs/api-gateway/runbook.md).
 
 ## States e pipelines
 
