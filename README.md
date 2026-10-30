@@ -22,6 +22,19 @@ A sequência de reconstrução e os limites dos procedimentos estão documentado
 
 Para diagnóstico dos nós EKS, consulte o [runbook](docs/eks-node-recovery.md). O provisionamento da EC2 runner está descrito em [Runner privado do GitHub Actions](docs/github-runner.md).
 
+## Orquestrador de pipelines — Fase 1
+
+O orquestrador PowerShell consulta, valida e consolida informações do GitHub para `autoflow-infra`, `autoflow-db`, `autoflow-lambda` e `autoflow`. A Fase 1 é somente leitura: não dispara workflows, não altera Environments, Variables, Secrets ou AWS, e não substitui os gates nativos das pipelines.
+
+```powershell
+.\scripts\orchestration\Invoke-AutoFlowPipeline.ps1 -Environment homolog -Action status
+.\scripts\orchestration\Invoke-AutoFlowPipeline.ps1 -Environment homolog -Action validate
+.\scripts\orchestration\Invoke-AutoFlowPipeline.ps1 -Environment homolog -Action report -JsonPath "$env:TEMP\autoflow-report.json" -MarkdownPath "$env:TEMP\autoflow-report.md"
+.\scripts\orchestration\Invoke-AutoFlowPipeline.ps1 -Environment homolog -Action report -DryRun
+```
+
+Consulte o [guia de uso, permissões e interpretação](docs/pipeline-orchestrator.md), a [arquitetura da Fase 1](docs/pipeline-orchestrator-architecture.md) e o [runbook de operação e troubleshooting](docs/pipeline-orchestrator-runbook.md). `validate` consulta `homolog` e `production` para avaliar isolamento das seis State Keys. Resultados de pipeline não comprovam que recursos AWS foram provisionados.
+
 ## Responsabilidades
 
 - `infra/`: VPC, subnets, Security Groups, EKS e node group.
