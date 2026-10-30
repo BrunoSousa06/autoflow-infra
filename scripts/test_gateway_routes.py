@@ -16,11 +16,13 @@ class GatewayRoutesTest(unittest.TestCase):
         self.assertIn("(github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')", plan)
         self.assertNotIn("refs/heads/feature/", plan)
         self.assertIn("environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}", plan)
+        self.assertIn("github.ref != 'refs/heads/main' || github.ref_protected", plan)
         self.assertIn("TF_VAR_environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}", plan)
         self.assertIn("TF_VAR_lambda_function_name: autoflow-cpf-validator-${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}", plan)
         self.assertIn("github.ref == 'refs/heads/develop' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.apply))", apply)
         self.assertIn("github.ref == 'refs/heads/main' && ((github.event_name == 'push' && needs.plan.outputs.initialized == 'true') || (github.event_name == 'workflow_dispatch' && inputs.apply))", apply)
         self.assertIn("environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}", apply)
+        self.assertIn("github.ref != 'refs/heads/main' || github.ref_protected", apply)
         self.assertIn("test \"$APPROVAL_CONFIGURED\" = \"true\"", apply)
         self.assertIn("required_reviewers", apply)
         self.assertLess(apply.index("Exigir aprovação efetiva configurada no environment"), apply.index("aws-actions/configure-aws-credentials@v4"))
@@ -49,7 +51,7 @@ class GatewayRoutesTest(unittest.TestCase):
         apply = workflow.split("\n  apply:\n", 1)[1]
 
         self.assertIn("terraform init -input=false -lockfile=readonly", plan)
-        self.assertIn("sha256sum gateway.tfplan .terraform.lock.hcl > gateway.tfplan.sha256", plan)
+        self.assertIn("sha256sum gateway.tfplan .terraform.lock.hcl gateway.tfplan.commit gateway.tfplan.metadata.json gateway-deployment-config.sha256 > gateway.tfplan.sha256", plan)
         self.assertIn('"$GITHUB_REF" == refs/heads/develop || "$GITHUB_REF" == refs/heads/main', plan)
         self.assertIn("sha256sum --check gateway.tfplan.sha256", apply)
 
@@ -76,8 +78,9 @@ class GatewayRoutesTest(unittest.TestCase):
     def test_remote_eks_state_absence_is_diagnosed_against_cluster(self):
         workflow = (ROOT / ".github/workflows/api-gateway.yml").read_text(encoding="utf-8")
         self.assertEqual(workflow.count("state_resource_guard.py --bucket \"$TF_VAR_terraform_state_bucket\" --key \"$TF_VAR_infra_state_key\""), 2)
-        self.assertEqual(workflow.count("Pré-requisito ausente: State EKS e cluster não encontrados."), 2)
-        self.assertNotIn('head-object --bucket "$TF_VAR_terraform_state_bucket" --key "$TF_VAR_infra_state_key"', workflow)
+        self.assertEqual(workflow.count("Pré-requisito ausente: State VPC/EKS e cluster não encontrados."), 2)
+        self.assertIn("terraform_deployment_fingerprint.py api-gateway create", workflow)
+        self.assertEqual(workflow.count('head-object --bucket "$TF_VAR_terraform_state_bucket" --key "$TF_VAR_infra_state_key" --expected-bucket-owner "$TF_VAR_expected_account_id"'), 2)
         self.assertNotIn("aws eks list-clusters", workflow)
         self.assertNotIn("aws eks list-nodegroups", workflow)
         self.assertIn('[[ "$TF_STATE_KEY" == "$GITHUB_DEPLOYMENT_ENVIRONMENT/"* ]]', workflow)

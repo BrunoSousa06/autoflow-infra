@@ -48,8 +48,27 @@ Para cada ambiente, execute a sequência de dependências: (1) VPC/EKS e rede; (
 
 ## States e pipelines
 
-Os componentes usam states S3 separados por ambiente e root: infraestrutura EKS, New Relic, aplicação, RDS, Lambda e API Gateway. As keys devem começar por `homolog/` ou `production/`, conforme o Environment, e nunca podem ser compartilhadas. Environments em uma mesma conta podem usar o mesmo bucket com keys distintas; contas diferentes usam buckets pertencentes às respectivas contas. Antes da inicialização, o workflow valida a identidade esperada e o proprietário do bucket. Não inicialize state vazio sobre recursos existentes e não edite arquivos de state manualmente.
+Os componentes usam States S3 separados por ambiente e root: infraestrutura EKS, New Relic, aplicação, RDS, Lambda e API Gateway. As keys são fornecidas por GitHub Environment, começam por `homolog/` ou `production/`, têm sufixos definidos externamente e nunca podem ser compartilhadas. Os roots de um Environment usam a mesma conta, bucket e região configurados para aquele Environment; consumidores recebem exatamente a key do produtor. Antes da inicialização, os workflows validam a identidade esperada e o proprietário do bucket. Não inicialize State vazio sobre recursos existentes e não edite arquivos de State manualmente.
 
-CI executa em PRs; branches feature não acessam AWS nem executam Plan/Apply. `Pipeline` aplica VPC/EKS após Plan e aprovação do Environment em `develop` e `main`. O primeiro Apply de API Gateway e New Relic é um dispatch explícito posterior à implantação das dependências; uma vez criado o state, pushes correspondentes em `main` seguem CD automático. Apply de produção só prossegue quando o Environment `production` tem `TERRAFORM_APPLY_APPROVAL_CONFIGURED=true` e Required reviewers efetivamente configurados; a própria proteção do Environment exige aprovação. Exclusões e substituições permanecem bloqueadas por padrão e exigem autorização explícita em dispatch, além dos guards do Plan. O workflow de criação automática de PRs é restrito a pushes em `main`. Consulte a [RFC](docs/api-gateway/rfc-api-gateway.md) e o [runbook](docs/api-gateway/runbook.md). Nenhum workflow instala gateways adicionais.
+### Validação integrada dos seis States
+
+Execute os testes locais da política integrada, sem acesso à AWS:
+
+```bash
+python -m unittest discover -s scripts -p 'test_terraform_state_contract.py' -v
+python -m unittest discover -s scripts -p 'test_terraform_deployment_fingerprint.py' -v
+```
+
+Para conferir a configuração efetiva antes de qualquer operação Terraform, prepare fora do checkout um JSON com os roots `vpc_eks`, `rds`, `lambda`, `application`, `api_gateway` e `newrelic` para ambos os Environments. Cada root informa `account_id`, `bucket`, `region` e `key`; roots consumidores também informam em `consumes` as keys recebidas dos produtores. O contrato compara RDS→VPC/EKS, Lambda→VPC/EKS e RDS, aplicação→RDS, API Gateway→VPC/EKS e New Relic→VPC/EKS. Obtenha os valores diretamente das Variables dos GitHub Environments e não registre o arquivo, valores reais, IDs, ARNs ou States no repositório ou nos logs.
+
+```bash
+python scripts/terraform_state_contract.py <caminho-externo-para-configuracao.json>
+```
+
+O comando exige prefixos por Environment, seis keys exclusivas por bucket, ausência de cruzamento entre homologação e produção, igualdade produtor/consumidor e correspondência de conta, bucket e região. Ele não inicializa backend, consulta objetos S3 ou lê conteúdo de State. Os testes usam apenas valores sintéticos e não definem sufixos autoritativos.
+
+Os backends S3 recebem `expected_bucket_owner`. No Terraform 1.16.5, a configuração do data source embutido `terraform_remote_state` não aceita esse atributo; a validação AWS local mostrou erro de atributo inesperado. Por isso, os workflows verificam previamente cada objeto remoto com `head-object --expected-bucket-owner` usando a mesma conta do Environment, e só depois inicializam Terraform. Essa checagem não lê nem imprime o conteúdo do State.
+
+CI executa em PRs; branches feature não acessam AWS nem executam Plan/Apply. `Pipeline` aplica VPC/EKS após Plan e aprovação do Environment em `develop` e `main` protegida. O primeiro Apply de API Gateway e New Relic é um dispatch explícito posterior à implantação das dependências; uma vez criado o State, pushes correspondentes em `main` seguem CD automático. Apply de produção só prossegue em `main` protegida quando o Environment `production` tem `TERRAFORM_APPLY_APPROVAL_CONFIGURED=true` e Required reviewers efetivamente configurados; a própria proteção do Environment exige aprovação. Exclusões e substituições permanecem bloqueadas por padrão e exigem autorização explícita em dispatch, além dos guards do Plan. O workflow de criação automática de PRs é restrito a pushes em `main`. Consulte a [RFC](docs/api-gateway/rfc-api-gateway.md) e o [runbook](docs/api-gateway/runbook.md). Nenhum workflow instala gateways adicionais.
 
 Use `AWS_PROFILE`, `AWS_REGION`, `AWS_EXPECTED_ACCOUNT_ID` e `TF_VAR_*` localmente. Antes do Plan VPC/EKS, `scripts/verify_eks_iam_roles.py --discover` identifica exatamente uma role de cluster e uma de node group por STS/IAM, validando conta, trust policies, AWS managed policies e a role do cluster existente. O Apply valida as roles gravadas no Plan aprovado, sem as redescobrir. Os guards são somente leitura e não alteram IAM. GitHub Actions Variables contêm conta, região, bucket e keys; credenciais e dados sensíveis permanecem em GitHub Secrets.

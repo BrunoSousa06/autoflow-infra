@@ -55,7 +55,7 @@ jobs:
       - run: terraform -chdir=infra/newrelic validate
 
   plan:
-    if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref != 'refs/heads/main' || github.ref_protected)
     needs: validate
     runs-on: ubuntu-latest
     outputs:
@@ -100,6 +100,14 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
+          VARIABLE_NAMES=$(gh api --paginate "repos/$GITHUB_REPOSITORY/environments/$DEPLOY_ENVIRONMENT/variables?per_page=30" --jq '.variables[].name')
+          for name in AWS_REGION AWS_EXPECTED_ACCOUNT_ID AWS_TERRAFORM_STATE_BUCKET AWS_TF_STATE_KEY_INFRA AWS_TF_STATE_KEY_NEWRELIC TERRAFORM_APPLY_APPROVAL_CONFIGURED; do
+            grep -Fxq -- "$name" <<< "$VARIABLE_NAMES" || { echo "A Variable $name precisa estar cadastrada no GitHub Environment selecionado." >&2; exit 1; }
+          done
+          SECRET_NAMES=$(gh api --paginate "repos/$GITHUB_REPOSITORY/environments/$DEPLOY_ENVIRONMENT/secrets?per_page=100" --jq '.secrets[].name')
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE NEW_RELIC_API_KEY; do
+            grep -Fxq -- "$name" <<< "$SECRET_NAMES" || { echo "O Secret $name precisa estar cadastrado no GitHub Environment selecionado." >&2; exit 1; }
+          done
           python scripts/newrelic_pipeline_guard.py validate
           [[ "$AWS_EXPECTED_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]
           test -n "$AWS_REGION"
@@ -252,7 +260,7 @@ jobs:
           python ../../scripts/newrelic_pipeline_guard.py check-plan newrelic-plan.json
           python ../../scripts/review_eks_plan.py newrelic-plan.json --allow-destructive "${{ inputs.allow_destructive || 'false' }}"
           printf '%s' "$GITHUB_SHA" > newrelic.tfplan.commit
-          gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$PLAN_ENCRYPTION_PASSPHRASE" --output newrelic.tfplan.gpg newrelic.tfplan
+          printf '%s\n' "$PLAN_ENCRYPTION_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --symmetric --cipher-algo AES256 --output newrelic.tfplan.gpg newrelic.tfplan
           sha256sum newrelic.tfplan.gpg newrelic.tfplan.commit newrelic-inputs.sha256 newrelic-reconciliation.sha256 > newrelic.tfplan.sha256
           rm -f newrelic.tfplan newrelic-plan.json
       - uses: actions/upload-artifact@v4
@@ -277,7 +285,7 @@ jobs:
           rm -f "$RUNNER_TEMP/legacy-state.json" "$RUNNER_TEMP/newrelic-state.json" "$RUNNER_TEMP/newrelic-account-presence" "$RUNNER_TEMP/newrelic-account-inventory.json" "$RUNNER_TEMP/newrelic-reconciliation-summary.json" "$RUNNER_TEMP/helm-presence" "$RUNNER_TEMP/helm-inventory.json" "$RUNNER_TEMP/newrelic-head-error" infra/newrelic/newrelic-reconciliation.auto.tf infra/newrelic/newrelic-reconciliation.sha256
 
   apply:
-    if: (github.ref == 'refs/heads/develop' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.apply))) || (github.ref == 'refs/heads/main' && ((github.event_name == 'push' && needs.plan.outputs.initialized == 'true') || (github.event_name == 'workflow_dispatch' && inputs.apply)))
+    if: ((github.ref == 'refs/heads/develop' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.apply))) || (github.ref == 'refs/heads/main' && ((github.event_name == 'push' && needs.plan.outputs.initialized == 'true') || (github.event_name == 'workflow_dispatch' && inputs.apply)))) && (github.ref != 'refs/heads/main' || github.ref_protected)
     needs: plan
     runs-on: ubuntu-latest
     environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
@@ -319,6 +327,14 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
+          VARIABLE_NAMES=$(gh api --paginate "repos/$GITHUB_REPOSITORY/environments/$DEPLOY_ENVIRONMENT/variables?per_page=30" --jq '.variables[].name')
+          for name in AWS_REGION AWS_EXPECTED_ACCOUNT_ID AWS_TERRAFORM_STATE_BUCKET AWS_TF_STATE_KEY_INFRA AWS_TF_STATE_KEY_NEWRELIC TERRAFORM_APPLY_APPROVAL_CONFIGURED; do
+            grep -Fxq -- "$name" <<< "$VARIABLE_NAMES" || { echo "A Variable $name precisa estar cadastrada no GitHub Environment selecionado." >&2; exit 1; }
+          done
+          SECRET_NAMES=$(gh api --paginate "repos/$GITHUB_REPOSITORY/environments/$DEPLOY_ENVIRONMENT/secrets?per_page=100" --jq '.secrets[].name')
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE NEW_RELIC_API_KEY; do
+            grep -Fxq -- "$name" <<< "$SECRET_NAMES" || { echo "O Secret $name precisa estar cadastrado no GitHub Environment selecionado." >&2; exit 1; }
+          done
           [[ "$AWS_EXPECTED_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]
           [[ "$AWS_REGION" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$ ]]
           [[ "$TF_STATE_KEY" == "$GITHUB_DEPLOYMENT_ENVIRONMENT/"* ]]
@@ -378,7 +394,7 @@ jobs:
           test "$(cat newrelic.tfplan.commit)" = "$GITHUB_SHA"
           sha256sum --check newrelic.tfplan.sha256
           python ../../scripts/newrelic_pipeline_guard.py verify-fingerprint newrelic-inputs.sha256
-          gpg --batch --yes --decrypt --passphrase "$PLAN_ENCRYPTION_PASSPHRASE" --output newrelic.tfplan newrelic.tfplan.gpg
+          printf '%s\n' "$PLAN_ENCRYPTION_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --decrypt --output newrelic.tfplan newrelic.tfplan.gpg
       - name: Revalidar cluster, Secret e estados antes do Apply
         run: |
           set -euo pipefail

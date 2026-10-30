@@ -177,13 +177,16 @@ O frontend chama `/auth/login` e as rotas de negócio no mesmo host. `cors_origi
 
 ## States e ownership
 
-| State | Responsabilidade final |
-|---|---|
-| `eks/terraform.tfstate` | VPC, EKS e node group |
-| `application/autoflow/terraform.tfstate` | Deployments, Services, NodePorts e ConfigMaps da aplicação |
-| `rds/terraform.tfstate` | RDS PostgreSQL e rede do banco |
-| `lambda/terraform.tfstate` | Função Lambda e configuração de execução; a invocação é integrada à HTTP API, sem Function URL no caminho declarado |
-| `api-gateway/terraform.tfstate` | HTTP API, rotas, integração nativa Lambda, VPC Link, ALB, Target Groups e observabilidade |
+| Root proprietário | Responsabilidade final | Key |
+|---|---|---|
+| VPC/EKS (`autoflow-infra/infra`) | VPC, EKS e node group | `AWS_TF_STATE_KEY_INFRA`, fornecida pelo Environment |
+| Aplicação (`autoflow/infra`) | Deployments, Services, NodePorts e ConfigMaps | `AWS_TF_STATE_KEY`, fornecida pelo Environment |
+| RDS (`autoflow-db/infra`) | RDS PostgreSQL e rede do banco | `AWS_TF_STATE_KEY`, fornecida pelo Environment |
+| Lambda (`autoflow-lambda/infra`) | Função Lambda e configuração de execução; a invocação é integrada à HTTP API, sem Function URL no caminho declarado | `AWS_TF_STATE_KEY`, fornecida pelo Environment |
+| API Gateway (`autoflow-infra/infra/api-gateway`) | HTTP API, rotas, integração nativa Lambda, VPC Link, ALB, Target Groups e observabilidade | `AWS_TF_STATE_KEY_GATEWAY`, fornecida pelo Environment |
+| New Relic (`autoflow-infra/infra/newrelic`) | Release Helm, dashboards, alertas e Synthetic | `AWS_TF_STATE_KEY_NEWRELIC`, fornecida pelo Environment |
+
+Cada key começa pelo prefixo do Environment (`homolog/` ou `production/`), tem sufixo externo e é exclusiva no bucket. Consumidores recebem exatamente a key publicada pelo root produtor. Conta, bucket e região são selecionados no GitHub Environment; não há keys definitivas declaradas nesta documentação.
 
 Os states permanecem separados. Nenhum state deve ser editado diretamente ou compartilhado entre contas.
 

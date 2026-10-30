@@ -30,11 +30,11 @@ O input de reconciliação é falso por padrão e não autoriza `state rm`, impo
 Exemplo de inspeção depois de confirmar bucket/key autorizados (os comandos leem state; a saída deve permanecer em diretório restrito):
 
 ```bash
-terraform -chdir=infra init -input=false -backend-config="bucket=$AWS_TERRAFORM_STATE_BUCKET" -backend-config="key=$AWS_TF_STATE_KEY_INFRA" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+terraform -chdir=infra init -input=false -backend-config="bucket=$AWS_TERRAFORM_STATE_BUCKET" -backend-config="key=$AWS_TF_STATE_KEY_INFRA" -backend-config="region=$AWS_REGION" -backend-config="expected_bucket_owner=$AWS_EXPECTED_ACCOUNT_ID" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
 terraform -chdir=infra state list
 umask 077
 terraform -chdir=infra state pull > "$SECURE_BACKUP_DIR/infra-before.json"
-terraform -chdir=infra/newrelic init -input=false -backend-config="bucket=$AWS_TERRAFORM_STATE_BUCKET" -backend-config="key=$AWS_TF_STATE_KEY_NEWRELIC" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+terraform -chdir=infra/newrelic init -input=false -backend-config="bucket=$AWS_TERRAFORM_STATE_BUCKET" -backend-config="key=$AWS_TF_STATE_KEY_NEWRELIC" -backend-config="region=$AWS_REGION" -backend-config="expected_bucket_owner=$AWS_EXPECTED_ACCOUNT_ID" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
 terraform -chdir=infra/newrelic state list
 terraform -chdir=infra/newrelic state pull > "$SECURE_BACKUP_DIR/newrelic-before.json"
 ```

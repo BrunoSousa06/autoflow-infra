@@ -19,9 +19,9 @@ Inventário observado nos workflows e Terraform deste repositório. `develop` se
 | `AWS_REGION` | Região AWS | Environment Variable em `homolog` e `production` | CD | `us-east-1` | Três workflows; obrigatória e validada antes das chamadas AWS. A configuração atual usa esta região. |
 | `AWS_EXPECTED_ACCOUNT_ID` | Conta AWS autorizada | Environment Variable em cada Environment; ID decimal com 12 dígitos | CD | Não aplicável | Três workflows; obrigatória, validada antes de configurar credenciais e comparada com STS. A propriedade do bucket também deve corresponder a esta conta. |
 | `AWS_TERRAFORM_STATE_BUCKET` | Bucket S3 para os roots Terraform daquele ambiente | Environment Variable em cada Environment | CD | Nome do bucket da conta selecionada | Obrigatória. Em uma conta, ambientes podem usar o mesmo bucket; em contas diferentes, cada Environment deve usar bucket da própria conta. O bootstrap valida proprietário, versionamento, criptografia e bloqueio público. |
-| `AWS_TF_STATE_KEY_INFRA` | Key do state VPC/EKS | Environment Variable em `homolog` e `production` | CD | `homolog/infra/terraform.tfstate` ou `production/infra/terraform.tfstate` | `pipeline.yml` e state remoto do Gateway/New Relic; obrigatória e prefixada pelo ambiente selecionado. |
-| `AWS_TF_STATE_KEY_NEWRELIC` | Key exclusiva do state New Relic | Environment Variable em `homolog` e `production` | Plan/Apply New Relic | `homolog/newrelic/terraform.tfstate` ou `production/newrelic/terraform.tfstate` | `newrelic.yml`; obrigatória, prefixada pelo ambiente e distinta da key de infraestrutura. |
-| `AWS_TF_STATE_KEY_GATEWAY` | Key exclusiva do state API Gateway | Environment Variable em `homolog` e `production` | CD | `homolog/api-gateway/terraform.tfstate` ou `production/api-gateway/terraform.tfstate` | `api-gateway.yml`; obrigatória e prefixada pelo ambiente selecionado. |
+| `AWS_TF_STATE_KEY_INFRA` | Key do State VPC/EKS | Environment Variable em `homolog` e `production` | CD | Prefixo do Environment e sufixo definido externamente | `pipeline.yml` e consumidores Gateway/New Relic; obrigatória, sem default, e prefixada pelo ambiente selecionado. |
+| `AWS_TF_STATE_KEY_NEWRELIC` | Key exclusiva do State New Relic | Environment Variable em `homolog` e `production` | Plan/Apply New Relic | Prefixo do Environment e sufixo definido externamente | `newrelic.yml`; obrigatória, sem default, prefixada pelo ambiente e distinta das demais keys. |
+| `AWS_TF_STATE_KEY_GATEWAY` | Key exclusiva do State API Gateway | Environment Variable em `homolog` e `production` | CD | Prefixo do Environment e sufixo definido externamente | `api-gateway.yml`; obrigatória, sem default, e prefixada pelo ambiente selecionado. |
 | `API_GATEWAY_CORS_ORIGINS` | Lista JSON de origens HTTPS CORS | Environment Variable em cada Environment | CD | `[]` | `api-gateway.yml`; obrigatória; deve conter um array JSON válido. |
 | `AUTOFLOW_REPOSITORY` | Repositório de contrato verificado pelo CI | GitHub Repository Variable | CI, opcional | `organizacao/autoflow` | `api-gateway.yml`; default `${{ format('{0}/autoflow', github.repository_owner) }}`. |
 | `AUTOFLOW_CONTRACT_REF` | Ref de contrato | GitHub Repository Variable | CI, opcional | `develop` | `api-gateway.yml`; default `develop`. |
@@ -85,7 +85,7 @@ O comando falha se a conta STS divergir, se a trust policy ou policies obrigató
 | `expected_account_id` | Obrigatório; sem default; 12 dígitos | Conta; `AWS_EXPECTED_ACCOUNT_ID`. |
 | `environment` | `homolog` | Nome do ambiente. |
 | `terraform_state_bucket` | Obrigatório; sem default | Bucket externo; `AWS_TERRAFORM_STATE_BUCKET`. |
-| `infra_state_key` | `eks/terraform.tfstate` | State plataforma; `AWS_TF_STATE_KEY_INFRA`. |
+| `infra_state_key` | Obrigatório; sem default | State plataforma do mesmo Environment; `AWS_TF_STATE_KEY_INFRA`. |
 | `cluster_name`, `nodegroup_name` | Derivados no workflow do Environment | Homologação usa `eks-autoflow`/`nodeg-autoflow`; produção usa `eks-autoflow-production`/`nodeg-autoflow-production`. O workflow valida os recursos exatos e status `ACTIVE`. |
 | `lambda_function_name` | Derivado no workflow do Environment | `autoflow-cpf-validator-homolog` ou `autoflow-cpf-validator-production`, validada por consulta AWS. |
 | `cors_origins` | `[]` | Origens CORS; `API_GATEWAY_CORS_ORIGINS`. |

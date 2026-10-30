@@ -24,6 +24,6 @@ terraform -chdir=modules/private-eks init -backend=false -input=false
 terraform -chdir=modules/private-eks test
 ```
 
-O backend S3 é parcial. Configure bucket, região e a chave exclusiva `api-gateway/terraform.tfstate` conforme o runbook. `expected_account_id`, `terraform_state_bucket` e `lambda_function_name` são obrigatórios; não há conta ou bucket de laboratório embutidos no módulo. O provider utiliza o perfil/credenciais do processo.
+O backend S3 é parcial. Configure bucket, região e a key exclusiva por meio das Variables do GitHub Environment selecionado. A key deve começar por `homolog/` ou `production/`; o sufixo é fornecido externamente e não é decidido pelo código. `expected_account_id`, `terraform_state_bucket`, `infra_state_key` e `lambda_function_name` são obrigatórios. O backend recebe `expected_bucket_owner`. O `terraform_remote_state` embutido no Terraform 1.16.5 não aceita esse atributo; antes do init, o workflow verifica o objeto remoto com `head-object --expected-bucket-owner` usando a mesma conta esperada.
 
 Quando aplicado, este root publica o endpoint pelo output `gateway_url`. Antes de qualquer Apply futuro, confirmar conta, state e escopo integral do plan; não aplicar planos de destruição sem aprovação específica.

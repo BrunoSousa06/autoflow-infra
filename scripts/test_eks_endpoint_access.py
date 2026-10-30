@@ -347,8 +347,9 @@ class EndpointAccessTests(unittest.TestCase):
         self.assertIn("needs: plan", apply)
         self.assertIn("infra-tfplan-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}", apply)
         download_position = apply.index("- uses: actions/download-artifact@v4")
-        integrity_position = apply.index("- name: Conferir vínculo e integridade do plan aprovado")
-        decrypt_position = apply.index('gpg --batch --yes --decrypt --passphrase "$PLAN_ENCRYPTION_PASSPHRASE" --output infra.tfplan infra.tfplan.gpg')
+        integrity_position = apply.index("- name: Validar fingerprint, run, commit e integridade antes de qualquer acesso AWS")
+        decrypt_position = apply.index("gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --decrypt --output infra.tfplan infra.tfplan.gpg")
+        configure_aws_position = apply.index("aws-actions/configure-aws-credentials@v4")
         init_position = apply.index("- name: Inicializar Terraform")
         reconcile_position = apply.index("prepare_eks_network_imports.py")
         show_position = apply.index("terraform show -json infra.tfplan > infra-plan.json")
@@ -357,6 +358,7 @@ class EndpointAccessTests(unittest.TestCase):
         apply_position = apply.index("terraform apply -input=false infra.tfplan")
         self.assertLess(download_position, integrity_position)
         self.assertLess(integrity_position, decrypt_position)
+        self.assertLess(decrypt_position, configure_aws_position)
         self.assertLess(decrypt_position, init_position)
         self.assertLess(init_position, show_position)
         self.assertLess(init_position, reconcile_position)
@@ -364,9 +366,10 @@ class EndpointAccessTests(unittest.TestCase):
         self.assertLess(show_position, newrelic_guard_position)
         self.assertLess(newrelic_guard_position, eks_guard_position)
         self.assertLess(eks_guard_position, apply_position)
-        integrity_step = apply.split("- name: Conferir vínculo e integridade do plan aprovado", 1)[1].split("- name:", 1)[0]
+        integrity_step = apply.split("- name: Validar fingerprint, run, commit e integridade antes de qualquer acesso AWS", 1)[1].split("- name:", 1)[0]
         self.assertIn('test "$(cat infra.tfplan.commit)" = "$GITHUB_SHA"', integrity_step)
         self.assertIn("sha256sum --check infra.tfplan.sha256", integrity_step)
+        self.assertIn("terraform_deployment_fingerprint.py vpc-eks verify", integrity_step)
         self.assertNotIn("newrelic", integrity_step)
         self.assertNotIn("terraform show", integrity_step)
         init_step = apply.split("- name: Inicializar Terraform", 1)[1].split("- name:", 1)[0]
