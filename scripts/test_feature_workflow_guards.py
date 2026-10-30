@@ -6,14 +6,18 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FeatureWorkflowGuardTests(unittest.TestCase):
-    def test_state_bucket_bootstrap_variable_is_limited_to_develop_and_defaults_closed(self):
+    def test_state_bucket_bootstrap_is_a_dedicated_approved_job(self):
         workflow = (ROOT / ".github/workflows/pipeline.yml").read_text(encoding="utf-8")
-        bootstrap = workflow.split("      - name: Verificar/bootstrap seguro do bucket de Terraform State", 1)[1]
-        bootstrap = bootstrap.split("      - name:", 1)[0]
+        bootstrap = workflow.split("  bootstrap_state_bucket:", 1)[1].split("\n  plan:", 1)[0]
+        plan = workflow.split("  plan:", 1)[1].split("\n  apply:", 1)[0]
 
-        self.assertIn("github.ref == 'refs/heads/develop' && vars.APPROVE_CREATE == 'true'", bootstrap)
-        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.approve_state_bucket_creation", bootstrap)
-        self.assertIn("|| 'false'", bootstrap)
+        self.assertIn("github.event_name == 'workflow_dispatch'", bootstrap)
+        self.assertIn("inputs.approve_state_bucket_creation == true", bootstrap)
+        self.assertIn("github.ref == 'refs/heads/develop'", bootstrap)
+        self.assertIn("github.ref == 'refs/heads/main'", bootstrap)
+        self.assertNotIn("needs:", bootstrap)
+        self.assertNotIn("--approve-create", plan)
+        self.assertIn("inputs.approve_state_bucket_creation != true", plan)
 
     def test_eks_network_reconciliation_variable_is_scoped_and_defaults_closed(self):
         workflow = (ROOT / ".github/workflows/pipeline.yml").read_text(encoding="utf-8")
@@ -52,7 +56,7 @@ class FeatureWorkflowGuardTests(unittest.TestCase):
         self.assertIn("EKS_CLUSTER_NAME: eks-${{ github.ref == 'refs/heads/main' && 'autoflow-production' || 'autoflow' }}", plan)
         self.assertIn("EKS_LEASE_KEY: ci/${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}/eks-endpoint-lease.json", plan)
         self.assertNotIn("NEWRELIC_DEACTIVATION_APPROVED", plan)
-        self.assertIn("(((github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'push') || ((github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'workflow_dispatch' && inputs.apply))", apply)
+        self.assertIn("(((github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'push') || ((github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'workflow_dispatch' && inputs.apply && inputs.approve_state_bucket_creation != true))", apply)
         self.assertNotIn("refs/heads/feature/", apply)
         self.assertIn("needs: plan", apply)
         self.assertIn("github.event_name == 'workflow_dispatch' && inputs.allow_destructive", plan)

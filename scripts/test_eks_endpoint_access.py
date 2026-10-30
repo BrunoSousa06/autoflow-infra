@@ -311,7 +311,7 @@ class EndpointAccessTests(unittest.TestCase):
         content = workflow.read_text(encoding="utf-8")
         plan = content.split("  plan:", 1)[1].split("  apply:", 1)[0]
         apply = content.split("\n  apply:\n", 1)[1]
-        self.assertIn("if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')", plan)
+        self.assertIn("github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.approve_state_bucket_creation != true)", plan)
         self.assertIn("default: false", content.split("approve_state_bucket_creation:", 1)[1].split("permissions:", 1)[0])
         self.assertIn("default: false", content.split("approve_eks_state_reconciliation:", 1)[1].split("allow_destructive:", 1)[0])
         self.assertIn("description: Autorizar exclusões/substituições após revisar o plan", content)
@@ -321,7 +321,6 @@ class EndpointAccessTests(unittest.TestCase):
         self.assertIn("ALLOW_DESTRUCTIVE: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false' }}", apply)
         self.assertNotIn("github.event_name == 'push' && 'true'", plan)
         self.assertNotIn("github.event_name == 'push' && 'true'", apply)
-        self.assertIn("inputs.approve_state_bucket_creation && 'true' || 'false'", plan)
         self.assertIn("inputs.approve_eks_state_reconciliation && 'true' || 'false'", plan)
         self.assertIn("inputs.approve_eks_state_reconciliation && 'true' || 'false'", apply)
         self.assertIn("prepare_eks_network_imports.py", plan)
@@ -336,7 +335,7 @@ class EndpointAccessTests(unittest.TestCase):
         self.assertIn("steps.authorize_eks.outcome != 'skipped'", apply)
         self.assertIn("github.event_name == 'push'", apply)
         self.assertIn("github.event_name == 'workflow_dispatch' && inputs.apply", apply)
-        self.assertIn("(((github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'push') || ((github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'workflow_dispatch' && inputs.apply))", apply)
+        self.assertIn("(((github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'push') || ((github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'workflow_dispatch' && inputs.apply && inputs.approve_state_bucket_creation != true))", apply)
         selected_environment = "environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}"
         self.assertIn(selected_environment, apply)
         self.assertIn("python scripts/verify_aws_account.py", plan)

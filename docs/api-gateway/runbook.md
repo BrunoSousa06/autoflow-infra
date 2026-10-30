@@ -1,6 +1,6 @@
 # Runbook do API Gateway
 
-> A configuração está finalizada e provisionável pelas pipelines CI/CD. Após reset do AWS Academy Learner Lab, reexecute as pipelines na ordem abaixo.
+> Este runbook descreve configuração versionada e procedimentos declarados; não confirma implantação atual na AWS. Após reset, configure os GitHub Environments, valide as State Keys e execute o [bootstrap S3 isolado](../state-bucket-bootstrap.md) antes de qualquer Terraform init ou pipeline de root.
 
 ## Topologia
 
@@ -8,7 +8,11 @@ O Amazon API Gateway HTTP API v2 recebe tráfego HTTPS. `POST /auth/login` invoc
 
 ## Provisionamento
 
-Antes de iniciar, confirme a sessão AWS, conta, região, variáveis e Secrets requeridos pelos workflows. Preserve os states remotos existentes: cada root usa state independente; não inicialize state vazio sobre recursos existentes nem edite state manualmente.
+Antes de iniciar, configure `homolog` para `develop` e `production` para `main`, incluindo Variables e Secrets próprios de cada Environment e Required reviewers efetivos. Preencha a matriz das seis State Keys com os valores de conta/região esperados e valide-a com `python scripts/terraform_state_contract.py <caminho-externo-para-configuracao.json>`. O comando valida somente o contrato fornecido, não confirma a identidade AWS, não acessa AWS nem consulta States remotos; a identidade real é validada pelo job protegido.
+
+Antes de qualquer Terraform init, execute o [bootstrap S3 isolado](../state-bucket-bootstrap.md) quando o bucket estiver ausente ou precisar de verificação. O dispatch autorizado verifica identidade AWS e controles do bucket, sem inicializar Terraform ou acionar Plan/Apply. Faça depois um dispatch separado para VPC/EKS, revise o Plan criptografado e só então solicite Apply com os gates do Environment. Não use o input de bootstrap como autorização para provisionamento.
+
+Preserve os States remotos existentes: cada root usa State independente; não inicialize State vazio sobre recursos existentes nem edite State manualmente. A tabela de seis roots, suas Variables de State Key e o limite de validação por checkout está em [arquitetura — States e ownership](arquitetura.md#states-e-ownership).
 
 Execute as pipelines nesta ordem:
 

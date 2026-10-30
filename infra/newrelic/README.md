@@ -5,6 +5,7 @@ Este root gerencia exclusivamente `helm_release.newrelic_kubernetes`, dashboards
 ## State e providers
 
 - Backend S3 independente: bucket e key exclusivos fornecidos por Variables do GitHub Environment selecionado. A key deve começar com `homolog/` ou `production/`; seu sufixo é definido externamente e não é fixado neste root.
+- Este root não cria o bucket. Se estiver ausente, execute primeiro o [bootstrap S3 isolado](../../docs/state-bucket-bootstrap.md); o workflow New Relic não faz bootstrap implícito.
 - Providers travados: AWS `5.100.0`, Helm `3.3.0` e New Relic `3.100.5`. O lockfile mantém checksums `h1` e `zh` existentes, inclusive plataformas Linux e Windows.
 - Inicialização local para validação sem backend: `terraform -chdir=infra/newrelic init -backend=false -input=false -lockfile=readonly`.
 

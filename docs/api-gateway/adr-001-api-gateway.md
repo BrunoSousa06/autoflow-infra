@@ -1,12 +1,12 @@
 # ADR-001 — Substituição do Kong pelo Amazon API Gateway
 
 - **Data:** 13/10/2026
-- **Status:** Aceita; configuração finalizada e provisionável pelas pipelines CI/CD.
+- **Status:** Aceita; configuração declarada e provisionável segundo o código local. Implantação AWS não verificada nesta revisão.
 - **Decisores:** Não registrado nos artefatos consultados
 
 ## Contexto
 
-A arquitetura anterior usava Kong no EKS como entrada para login, frontend e API. A configuração final declara Amazon API Gateway HTTP API v2 como entrada e não declara Kong como gateway operacional. Após reset do Learner Lab, execute novamente as pipelines CI/CD para provisionar a arquitetura.
+A arquitetura anterior usava Kong no EKS como entrada para login, frontend e API. A configuração final declara Amazon API Gateway HTTP API v2 como entrada e não declara Kong como gateway operacional. Após reset do Learner Lab, configure e valide os Environments, execute o bootstrap S3 isolado e depois as pipelines CI/CD na ordem descrita nos runbooks; esta sequência não comprova provisionamento atual.
 
 ## Decisão
 
@@ -25,3 +25,7 @@ Adotar Amazon API Gateway HTTP API v2 como entrada pública única. `POST /auth/
 - A autorização de domínio continua no Spring Boot; o API Gateway não substitui a consulta de perfil/estado.
 - O state do gateway é separado dos states de plataforma, aplicação, RDS e Lambda. Mudanças destrutivas exigem revisão de plano e aprovação operacional.
 - A reversão ao Kong não é automática após sua retirada e requer reimplantação explícita, infraestrutura e aprovação.
+
+## Evolução operacional do backend Terraform — 30/10/2026
+
+A decisão deste ADR sobre API Gateway permanece inalterada. Separadamente, a criação do bucket de backend S3 foi removida do fluxo Plan da VPC/EKS e passou a um job independente do workflow `Pipeline`, iniciado somente por `workflow_dispatch` com `approve_state_bucket_creation=true` e protegido pelo GitHub Environment correspondente. Esse job valida a identidade AWS e os controles do bucket; não executa Terraform e não dispara os jobs de Plan ou Apply. A Variable legada `APPROVE_CREATE` deixou de ser consumida. A alteração registra comportamento de código e testes locais, sem afirmar execução ou alteração de recursos na AWS.

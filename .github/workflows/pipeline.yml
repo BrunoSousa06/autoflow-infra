@@ -15,7 +15,7 @@ on:
         type: boolean
         default: false
       approve_state_bucket_creation:
-        description: Permitir bootstrap do bucket de Terraform State quando ausente
+        description: Executar somente o job isolado de bootstrap; autoriza criação apenas se o bucket estiver ausente
         type: boolean
         default: false
       approve_eks_state_reconciliation:
@@ -39,6 +39,7 @@ concurrency:
 jobs:
   validate:
     name: CI Terraform de VPC/EKS
+    if: github.event_name != 'workflow_dispatch' || inputs.approve_state_bucket_creation != true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,6 +48,8 @@ jobs:
       - run: python -m unittest discover -s scripts -p "test_terraform_state_contract.py" -v
       - run: python -m unittest discover -s scripts -p "test_terraform_deployment_fingerprint.py" -v
       - run: python -m unittest discover -s scripts -p "test_terraform_state_root_contracts.py" -v
+      - run: python -m unittest discover -s scripts -p "test_bootstrap_state_bucket.py" -v
+      - run: python -m unittest discover -s scripts -p "test_bootstrap_workflow_isolation.py" -v
       - run: python -m unittest discover -s scripts -p "test_eks_endpoint_access.py" -v
       - run: python -m unittest discover -s scripts -p "test_prepare_eks_access_imports.py" -v
       - run: python -m unittest discover -s scripts -p "test_prepare_eks_network_imports.py" -v
@@ -60,9 +63,55 @@ jobs:
       - run: terraform -chdir=infra init -backend=false -input=false
       - run: terraform -chdir=infra validate
 
+  bootstrap_state_bucket:
+    name: Bootstrap isolado do bucket Terraform State
+    if: github.event_name == 'workflow_dispatch' && inputs.approve_state_bucket_creation == true && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && (github.ref != 'refs/heads/main' || github.ref_protected)
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
+    env:
+      GITHUB_DEPLOYMENT_ENVIRONMENT: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
+      AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_TERRAFORM_STATE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Validar configuração e proteção efetiva do Environment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVAL_CONFIGURED: ${{ vars.TERRAFORM_APPLY_APPROVAL_CONFIGURED }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VARIABLE_NAMES=$(gh api --paginate "repos/$GITHUB_REPOSITORY/environments/$GITHUB_DEPLOYMENT_ENVIRONMENT/variables?per_page=30" --jq '.variables[].name')
+          for name in AWS_EXPECTED_ACCOUNT_ID AWS_REGION AWS_TERRAFORM_STATE_BUCKET TERRAFORM_APPLY_APPROVAL_CONFIGURED; do
+            grep -Fxq -- "$name" <<< "$VARIABLE_NAMES" || { echo "A Variable $name precisa estar cadastrada no GitHub Environment selecionado." >&2; exit 1; }
+          done
+          SECRET_NAMES=$(gh api --paginate "repos/$GITHUB_REPOSITORY/environments/$GITHUB_DEPLOYMENT_ENVIRONMENT/secrets?per_page=100" --jq '.secrets[].name')
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; do
+            grep -Fxq -- "$name" <<< "$SECRET_NAMES" || { echo "O Secret $name precisa estar cadastrado no GitHub Environment selecionado." >&2; exit 1; }
+          done
+          [[ "$AWS_EXPECTED_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]
+          [[ "$AWS_REGION" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$ ]]
+          test -n "$AWS_TERRAFORM_STATE_BUCKET"
+          test "$APPROVAL_CONFIGURED" = true
+          REVIEWERS=$(gh api "repos/$GITHUB_REPOSITORY/environments/$GITHUB_DEPLOYMENT_ENVIRONMENT" --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length')
+          test "$REVIEWERS" -gt 0
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Validar identidade AWS antes de qualquer escrita
+        run: python scripts/verify_aws_account.py
+      - name: Criar ou verificar o bucket sem tocar nos States
+        run: python scripts/bootstrap_state_bucket.py --approve-create
+
   plan:
     name: Terraform Plan protegido
-    if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref != 'refs/heads/main' || github.ref_protected)
+    if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.approve_state_bucket_creation != true)) && (github.ref != 'refs/heads/main' || github.ref_protected)
     needs: validate
     runs-on: ubuntu-latest
     environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
@@ -157,14 +206,12 @@ jobs:
       - name: Detectar EKS antes do Plan
         id: eks_preflight
         run: python scripts/eks_cluster_preflight.py --cluster "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
-      - name: Verificar/bootstrap seguro do bucket de Terraform State
+      - name: Verificar existência e conformidade do bucket de Terraform State
         env:
           AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
           AWS_TERRAFORM_STATE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
           AWS_REGION: ${{ vars.AWS_REGION }}
-          APPROVE_CREATE: ${{ github.ref == 'refs/heads/develop' && vars.APPROVE_CREATE == 'true' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.approve_state_bucket_creation && 'true' || 'false') }}
-        run: |
-          if [ "$APPROVE_CREATE" = true ]; then python scripts/bootstrap_state_bucket.py --approve-create; else python scripts/bootstrap_state_bucket.py; fi
+        run: python scripts/bootstrap_state_bucket.py
       - name: Autorizar IP público exclusivo no EKS e aguardar atualização
         id: authorize_eks
         if: steps.eks_preflight.outputs.exists == 'true'
@@ -251,7 +298,7 @@ jobs:
 
   apply:
     name: Terraform Apply protegido por environment
-    if: (((github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'push') || ((github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'workflow_dispatch' && inputs.apply)) && (github.ref != 'refs/heads/main' || github.ref_protected)
+    if: (((github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'push') || ((github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'workflow_dispatch' && inputs.apply && inputs.approve_state_bucket_creation != true)) && (github.ref != 'refs/heads/main' || github.ref_protected)
     needs: plan
     runs-on: ubuntu-latest
     environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}

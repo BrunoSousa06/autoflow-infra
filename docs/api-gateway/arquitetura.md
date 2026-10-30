@@ -1,6 +1,6 @@
 # Arquitetura final: AutoFlow com Amazon API Gateway
 
-**Status:** arquitetura finalizada e configurada para provisionamento pelas pipelines CI/CD. Após reset do AWS Academy Learner Lab, execute novamente as pipelines para provisionar os recursos do ambiente.
+**Status:** arquitetura e pipelines declaradas no código deste checkout. Esta documentação e os testes locais não comprovam recursos implantados nem configuração efetiva na AWS; após reset do AWS Academy Learner Lab, a implantação precisa ser executada e verificada operacionalmente.
 
 Esta página consolida a arquitetura e os diagramas C4. A decisão arquitetural está registrada em [ADR-001](adr-001-api-gateway.md) e os detalhes de desenho/implantação em [RFC técnica](rfc-api-gateway.md).
 
@@ -76,7 +76,7 @@ flowchart LR
   SYNTH -.->|verificação da URL configurada| API
 ```
 
-O contrato atualmente documentado pela Lambda usa `cpf_cnpj` e `senha`. O diagrama não implica que o API Gateway valide JWT: a validação e autorização de domínio das rotas protegidas são feitas pelo backend Spring Boot. New Relic, integração Kubernetes, APM, dashboards, alertas e Synthetic estão configurados para provisionamento pelos roots Terraform correspondentes. Após reset do Learner Lab, execute também a pipeline New Relic.
+O contrato atualmente documentado pela Lambda usa `cpf_cnpj` e `senha`. O diagrama não implica que o API Gateway valide JWT: a validação e autorização de domínio das rotas protegidas são feitas pelo backend Spring Boot. New Relic, integração Kubernetes, APM, dashboards, alertas e Synthetic estão declarados para provisionamento pelos roots Terraform correspondentes. Após reset do Learner Lab, siga a ordem do [runbook de primeiro provisionamento](../eks-primeiro-provisionamento.md), que começa pelo bootstrap S3 isolado.
 
 ## Sequências de comunicação
 
@@ -167,7 +167,7 @@ flowchart TB
   DbSG -.-> RDS
 ```
 
-Terraform declara três subnets públicas e três privadas distribuídas em três AZs; ALB interno, VPC Link, EKS e RDS usam subnets privadas conforme seus roots. O SG do ALB permite o SG do VPC Link nos listeners 8080/8081 e saída ao SG dos nodes nas portas 30080/30081; os NodePorts aceitam tráfego somente do SG do ALB. O SG do RDS permite PostgreSQL às origens configuradas no root do banco. O tráfego privado VPC Link–ALB usa HTTP; TLS termina no endpoint gerenciado do API Gateway. Após reset do Learner Lab, reexecute as pipelines CI/CD para provisionar essa topologia.
+Terraform declara três subnets públicas e três privadas distribuídas em três AZs; ALB interno, VPC Link, EKS e RDS usam subnets privadas conforme seus roots. O SG do ALB permite o SG do VPC Link nos listeners 8080/8081 e saída ao SG dos nodes nas portas 30080/30081; os NodePorts aceitam tráfego somente do SG do ALB. O SG do RDS permite PostgreSQL às origens configuradas no root do banco. O tráfego privado VPC Link–ALB usa HTTP; TLS termina no endpoint gerenciado do API Gateway. Para implantação após reset, configure e valide os Environments, faça bootstrap do bucket em job separado e siga o [runbook](runbook.md); o diagrama registra configuração versionada, não estado AWS observado.
 
 ## Rotas e autorização
 
@@ -177,44 +177,56 @@ O frontend chama `/auth/login` e as rotas de negócio no mesmo host. `cors_origi
 
 ## States e ownership
 
-| Root proprietário | Responsabilidade final | Key |
-|---|---|---|
-| VPC/EKS (`autoflow-infra/infra`) | VPC, EKS e node group | `AWS_TF_STATE_KEY_INFRA`, fornecida pelo Environment |
-| Aplicação (`autoflow/infra`) | Deployments, Services, NodePorts e ConfigMaps | `AWS_TF_STATE_KEY`, fornecida pelo Environment |
-| RDS (`autoflow-db/infra`) | RDS PostgreSQL e rede do banco | `AWS_TF_STATE_KEY`, fornecida pelo Environment |
-| Lambda (`autoflow-lambda/infra`) | Função Lambda e configuração de execução; a invocação é integrada à HTTP API, sem Function URL no caminho declarado | `AWS_TF_STATE_KEY`, fornecida pelo Environment |
-| API Gateway (`autoflow-infra/infra/api-gateway`) | HTTP API, rotas, integração nativa Lambda, VPC Link, ALB, Target Groups e observabilidade | `AWS_TF_STATE_KEY_GATEWAY`, fornecida pelo Environment |
-| New Relic (`autoflow-infra/infra/newrelic`) | Release Helm, dashboards, alertas e Synthetic | `AWS_TF_STATE_KEY_NEWRELIC`, fornecida pelo Environment |
+| Root proprietário | Responsabilidade final | Variable da State Key no repositório proprietário | Isolamento observado |
+|---|---|---|---|
+| VPC/EKS (`autoflow-infra/infra`) | VPC, EKS e node group | `AWS_TF_STATE_KEY_INFRA` | O workflow deste repositório exige o prefixo do Environment selecionado. |
+| Aplicação (`autoflow/infra`) | Deployments, Services, NodePorts e ConfigMaps | `AWS_TF_STATE_KEY` | O workflow do checkout consultado consome a Variable; a validação da matriz de seis roots é separada e não é disparada automaticamente por este repositório. |
+| RDS (`autoflow-db/infra`) | RDS PostgreSQL e rede do banco | `AWS_TF_STATE_KEY` | O workflow do checkout consultado consome a Variable; a validação da matriz de seis roots é separada e não é disparada automaticamente por este repositório. |
+| Lambda (`autoflow-lambda/infra`) | Função Lambda e configuração de execução; a invocação é integrada à HTTP API, sem Function URL no caminho declarado | `AWS_TF_STATE_KEY` | O workflow do checkout consultado também valida a key atual `lambda/terraform.tfstate`; confirmar a separação por Environment antes de promover esse root. |
+| API Gateway (`autoflow-infra/infra/api-gateway`) | HTTP API, rotas, integração nativa Lambda, VPC Link, ALB, Target Groups e observabilidade | `AWS_TF_STATE_KEY_GATEWAY` | O workflow deste repositório exige o prefixo do Environment e distingue a key de VPC/EKS e New Relic. |
+| New Relic (`autoflow-infra/infra/newrelic`) | Release Helm, dashboards, alertas e Synthetic | `AWS_TF_STATE_KEY_NEWRELIC` | O workflow deste repositório exige o prefixo do Environment e distingue a key de VPC/EKS. |
 
-Cada key começa pelo prefixo do Environment (`homolog/` ou `production/`), tem sufixo externo e é exclusiva no bucket. Consumidores recebem exatamente a key publicada pelo root produtor. Conta, bucket e região são selecionados no GitHub Environment; não há keys definitivas declaradas nesta documentação.
+Para cada Environment, a matriz lógica contém seis keys diferentes: cada key deve começar por `homolog/` ou `production/`, ter sufixo fornecido externamente e não ser compartilhada entre roots. Os consumidores recebem a key exata do root produtor. `terraform_state_contract.py` valida esses invariantes quando recebe a matriz JSON externa; a validação não acessa AWS e não é automaticamente chamada pelo `Pipeline` deste repositório. As configurações de produção e a implantação dos seis roots nos outros repositórios não são comprovadas por este checkout. Conta, bucket, região e sufixos efetivos devem vir dos respectivos GitHub Environments; não há valores reais versionados aqui.
 
 Os states permanecem separados. Nenhum state deve ser editado diretamente ou compartilhado entre contas.
 
-## 4. Fluxo de implantação declarado nos workflows
+## 4. Fluxo de bootstrap e implantação declarado nos workflows
 
 ```mermaid
 sequenceDiagram
   actor Dev as Desenvolvedor
   participant GH as GitHub Actions
-  participant CI as CI em PR/push
-  participant Env as Environment homolog
-  participant TF as Terraform plan/gates
-  participant AWS as AWS homolog
-  Dev->>GH: PR ou push em develop/main
-  GH->>CI: Executar testes e validações de CI
-  CI-->>Dev: Resultado dos checks, sem Apply nesses eventos
-  Dev->>GH: workflow_dispatch em develop com deploy=false
-  GH->>Env: Job plan requer Environment homolog
-  Env->>TF: Disponibilizar Secrets/Variables após eventuais proteções do Environment
-  TF->>TF: Validar conta/state, gerar plan e aplicar gate de destruições
-  TF-->>Dev: Resultado do plan para revisão fora do workflow
-  Dev->>GH: Novo workflow_dispatch com deploy=true após revisão
-  GH->>Env: Job de deploy requer Environment homolog
-  Env->>TF: Iniciar job se as proteções efetivas permitirem
-  TF->>TF: Revalidar state, regenerar plan e conferir gates
-  TF->>AWS: Apply somente se guards e inputs permitirem
+  participant Env as GitHub Environment selecionado
+  participant Contract as Validador local dos seis States
+  participant Boot as Job bootstrap_state_bucket
+  participant Plan as Jobs validate e plan
+  participant Apply as Job apply
+  participant AWS as Conta AWS do Environment
+  Dev->>Env: Configurar Variables, Secrets e Required reviewers
+  Dev->>Contract: Validar matriz externa de conta, bucket, região e seis keys
+  Contract-->>Dev: Contrato local válido; sem acesso AWS
+  Dev->>GH: Dispatch com approve_state_bucket_creation=true
+  GH->>Env: Aguardar aprovação nativa do Environment
+  Env->>Boot: Liberar somente o job de bootstrap
+  Boot->>AWS: Validar identidade STS e proprietário esperado
+  Boot->>AWS: Verificar bucket e controles de segurança
+  alt Bucket ausente
+    Boot->>AWS: Criar bucket e aplicar controles; verificar resultado
+  else Bucket existente e compatível
+    Boot->>AWS: Somente leitura; nenhum put/create
+  end
+  Note over GH,Plan: validate, Plan, Apply e Terraform init ficam ignorados neste dispatch
+  Dev->>GH: Novo dispatch com approve_state_bucket_creation=false
+  GH->>Plan: Executar CI e Plan protegido; apply=false permite revisão do artifact
+  Plan->>AWS: Revalidar conta, State e backend; gerar Plan criptografado/fingerprint
+  Dev->>GH: Dispatch posterior com apply=true, após revisar o Plan
+  GH->>Plan: Validar e gerar novo Plan no run de Apply
+  Plan->>AWS: Revalidar backend e criar artifact vinculado ao run/commit
+  GH->>Env: Job apply aguarda aprovação nativa
+  Env->>Apply: Liberar após checks de artifact, fingerprint, conta e state
+  Apply->>AWS: Aplicar somente o Plan vinculado à mesma execução
 ```
 
-O diagrama descreve os fluxos e gates declarados nos workflows. Após reset do Learner Lab, execute novamente as pipelines CI/CD para provisionar a arquitetura.
+O diagrama descreve configuração versionada e fluxos declarados, não uma implantação confirmada. O Plan-only dispatch e o dispatch com `apply=true` são execuções distintas; o segundo gera um Plan novo no mesmo run e aplica esse artifact somente após o gate do Environment.
 
 Não aplicar plans de destruição sem revisão. A ordem e os comandos de provisionamento estão no [runbook](runbook.md).

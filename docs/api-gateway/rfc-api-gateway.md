@@ -1,7 +1,7 @@
 # RFC técnica — Entrada do AutoFlow com Amazon API Gateway
 
 - **Data:** 13/10/2026
-- **Estado:** arquitetura e configuração Terraform finalizadas e provisionáveis pelas pipelines CI/CD.
+- **Estado:** arquitetura e configuração Terraform declaradas nos checkouts; implantação AWS não verificada nesta revisão.
 - **Escopo:** HTTP API, autenticação Lambda, acesso privado ao EKS/RDS, operação Terraform e CI/CD deste repositório.
 
 ## Resumo
@@ -26,7 +26,7 @@ O root `infra/api-gateway` consome outputs do state de EKS e consulta EKS, node 
 
 ## CI/CD
 
-CI ocorre em PRs e pushes conforme os workflows. CD de homologação é iniciado pela pipeline correspondente e aplica Terraform após os gates configurados. Após reset do AWS Academy Learner Lab, execute novamente as pipelines CI/CD para provisionar os recursos.
+CI ocorre em PRs e pushes conforme os workflows. Para `Pipeline` de VPC/EKS, primeiro configure `homolog`/`production` e valide a matriz externa das seis State Keys. O bootstrap do bucket é um `workflow_dispatch` independente autorizado por `approve_state_bucket_creation=true`; não inicia `validate`, Plan, Apply nem Terraform init. Após confirmar o bucket, faça dispatch separado para Plan e, após revisar o Plan, outro dispatch com `apply=true`; o Apply aguarda os gates e usa o Plan criptografado e vinculado à execução. O bootstrap e esses gates descrevem código versionado, não comprovam que os Environments ou recursos AWS estejam efetivamente configurados/implantados. Consulte o [procedimento de bootstrap](../state-bucket-bootstrap.md) e o [runbook](runbook.md).
 
 ## Escopo e limites
 
