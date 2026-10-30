@@ -61,16 +61,22 @@ class TerraformStateContractTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             validate_contract(contract)
 
-    def test_rejects_duplicate_root_keys_and_consumer_producer_divergence(self):
+    def test_rejects_duplicate_root_keys(self):
         contract = sample_contract()
         roots = contract["environments"]["homolog"]["roots"]
         roots["lambda"]["key"] = roots["rds"]["key"]
         with self.assertRaises(ContractError):
             validate_contract(contract)
-        contract = sample_contract()
-        contract["environments"]["production"]["roots"]["application"]["consumes"]["rds"] = "production/another.tfstate"
-        with self.assertRaises(ContractError):
-            validate_contract(contract)
+
+    def test_rejects_application_rds_reference_divergence_in_both_environments(self):
+        for environment in ("homolog", "production"):
+            with self.subTest(environment=environment):
+                contract = sample_contract()
+                contract["environments"][environment]["roots"]["application"]["consumes"]["rds"] = (
+                    f"{environment}/another.tfstate"
+                )
+                with self.assertRaises(ContractError):
+                    validate_contract(contract)
 
     def test_rejects_account_bucket_or_region_inconsistent_with_environment(self):
         for field, value in (("account_id", "invalid"), ("bucket", "other-state-bucket"), ("region", "not-a-region")):

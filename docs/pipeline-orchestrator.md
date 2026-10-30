@@ -57,24 +57,24 @@ Mesmo quando `-Environment homolog` é selecionado, a validação consulta os do
 
 - Repositório, branch associada e existência do GitHub Environment.
 - Required reviewers retornados pela API e política de branches para a branch mapeada.
-- Presença de Variables exigidas pelos workflows observados, nomes dos Secrets obrigatórios e valor de `TERRAFORM_APPLY_APPROVAL_CONFIGURED`.
+- Presença de Variables exigidas pelos workflows observados, nomes dos Secrets obrigatórios e valor de `TERRAFORM_APPLY_APPROVAL_CONFIGURED`. O valor exato `false` é reportado como bloqueio operacional deliberado (`OPERATIONAL_BLOCKED`); não autoriza Apply nem altera os gates. Valores ausentes ou vazios são inconsistências, assim como qualquer valor diferente de `true`/`false`.
 - Formato de conta e região, valores necessários e consistência de conta, bucket e região entre os seis roots.
 - As seis State Keys, as referências entre produtor/consumidor e o isolamento homolog/production.
 
 O contrato de State é montado em memória a partir de Variables consultadas e validado por execução do comando existente `python scripts/terraform_state_contract.py <arquivo-temporario>`. O orquestrador não duplica nem altera as regras de `terraform_state_contract.py`; o arquivo temporário UTF-8 sem BOM é removido ao terminar e não contém Secrets ou tokens. A consulta não lê buckets, objetos S3 nem conteúdo de Terraform State.
 
-O mapeamento observado das seis State Keys está abaixo. Para raízes consumidoras, as referências vêm das Variables usadas pelos workflows/Terraform. A aplicação atualmente usa `rds/terraform.tfstate` como default de `rds_state_key` e o workflow observado não o substitui; a validação mantém esse valor observado para que o contrato reporte uma referência não isolada em vez de aprová-la implicitamente.
+O mapeamento observado das seis State Keys está abaixo. Para raízes consumidoras, as referências vêm das Variables usadas pelos workflows/Terraform. Na aplicação, `infra/data.tf` usa `var.rds_state_key`, variável obrigatória em `infra/vars.tf`; os jobs Plan e Apply do workflow definem `TF_VAR_rds_state_key` a partir de `AWS_RDS_STATE_KEY` e exigem essa Variable no Environment. Assim, o default literal `rds/terraform.tfstate` anteriormente usado pelo Orchestrator não representava o fluxo do deploy.
 
 | Root | Repositório / Variable da key | Referências consultadas |
 |---|---|---|
 | VPC/EKS (`vpc_eks`) | `autoflow-infra` / `AWS_TF_STATE_KEY_INFRA` | — |
 | RDS (`rds`) | `autoflow-db` / `AWS_TF_STATE_KEY` | `AWS_INFRA_STATE_KEY` → VPC/EKS |
 | Lambda (`lambda`) | `autoflow-lambda` / `AWS_TF_STATE_KEY` | `AWS_INFRA_STATE_KEY` → VPC/EKS; `AWS_RDS_STATE_KEY` → RDS |
-| Aplicação (`application`) | `autoflow` / `AWS_TF_STATE_KEY` | Default atual `rds/terraform.tfstate` → RDS |
+| Aplicação (`application`) | `autoflow` / `AWS_TF_STATE_KEY` | `AWS_RDS_STATE_KEY` → RDS |
 | API Gateway (`api_gateway`) | `autoflow-infra` / `AWS_TF_STATE_KEY_GATEWAY` | `AWS_TF_STATE_KEY_INFRA` → VPC/EKS |
 | New Relic (`newrelic`) | `autoflow-infra` / `AWS_TF_STATE_KEY_NEWRELIC` | `AWS_TF_STATE_KEY_INFRA` → VPC/EKS |
 
-As configurações observadas nos repositórios DB e Lambda ainda usam algumas chaves legadas sem prefixo de ambiente em verificações locais do workflow. Essas divergências são encontradas pelo contrato, não corrigidas pelo orquestrador. A validação também consulta `production` ainda que o workflow de um repositório não tenha atualmente um job de Apply de produção.
+As State Keys do RDS e as referências VPC/EKS → DB e VPC/EKS → Lambda/RDS são obtidas das Variables por Environment; o contrato verifica que as referências coincidam com os produtores. Não foi identificada divergência efetiva entre a aplicação e o State Key do RDS no fluxo declarado localmente. A validação também consulta `production` ainda que o workflow de um repositório não tenha atualmente um job de Apply de produção.
 
 Não são consultados valores de Secrets. Um nome de Secret presente não prova que o valor existe, está atualizado ou é aceito pelo serviço consumidor. Para Variable ou Secrets list inacessível, o resultado é `UNKNOWN` ou `ACCESS_DENIED`, nunca ausência presumida.
 
@@ -112,6 +112,7 @@ O plano mostra endpoints como modelos quando seus IDs dependem das respostas fut
 | `1` | Inconsistência de configuração confirmada por resposta válida. |
 | `2` | Parâmetro inválido, ação não suportada ou opção de exportação incompatível. |
 | `3` | Consulta/API indisponível, falta de permissão, rate limit, timeout, resposta inválida ou informação desconhecida necessária. |
+| `4` | Bloqueio operacional deliberado: `TERRAFORM_APPLY_APPROVAL_CONFIGURED=false`; Apply segue bloqueado pelos gates do workflow. |
 
 Estados como `MISSING_ENVIRONMENT` significam ausência confirmada em inventário válido depois de identificar o repositório. `ACCESS_DENIED`, `RATE_LIMIT`, `TIMEOUT`, `API_UNAVAILABLE`, `INVALID_RESPONSE` e `UNKNOWN` não são traduzidos em configuração ausente. O resultado global dá precedência a falhas/indisponibilidades de consulta sobre inconsistências encontradas em dados parciais.
 

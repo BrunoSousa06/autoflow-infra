@@ -42,12 +42,12 @@ O contrato de State recebe os valores consultados das Environment Variables e as
 vpc_eks -> AWS_TF_STATE_KEY_INFRA (autoflow-infra)
 rds -> AWS_TF_STATE_KEY (autoflow-db), consome AWS_INFRA_STATE_KEY
 lambda -> AWS_TF_STATE_KEY (autoflow-lambda), consome AWS_INFRA_STATE_KEY e AWS_RDS_STATE_KEY
-application -> AWS_TF_STATE_KEY (autoflow), consome o default rds/terraform.tfstate observado
+application -> AWS_TF_STATE_KEY (autoflow), consome AWS_RDS_STATE_KEY
 api_gateway -> AWS_TF_STATE_KEY_GATEWAY (autoflow-infra), consome AWS_TF_STATE_KEY_INFRA
 newrelic -> AWS_TF_STATE_KEY_NEWRELIC (autoflow-infra), consome AWS_TF_STATE_KEY_INFRA
 ```
 
-O orquestrador grava temporariamente o documento necessário ao helper Python fora do checkout e o remove em `finally`. O documento não inclui Secrets, tokens ou respostas HTTP. Os valores não são incorporados ao relatório.
+O orquestrador grava temporariamente o documento necessário ao helper Python fora do checkout e o remove em `finally`. O documento não inclui Secrets, tokens ou respostas HTTP. Os valores não são incorporados ao relatório. A aplicação consome `var.rds_state_key`, preenchida no Plan/Apply pelo workflow com `TF_VAR_rds_state_key: ${{ vars.AWS_RDS_STATE_KEY }}`; o Orchestrator usa a mesma Variable para montar a referência ao root produtor RDS.
 
 ## Estados e falha segura
 

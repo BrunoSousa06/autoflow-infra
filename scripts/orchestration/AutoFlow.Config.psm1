@@ -56,7 +56,7 @@ $script:AutoFlowRepositories = @(
         Branches = @{ homolog = 'develop'; production = 'main' }
         RequiredVariables = @(
             'AWS_EXPECTED_ACCOUNT_ID', 'AWS_REGION', 'AWS_TERRAFORM_STATE_BUCKET',
-            'AWS_TF_STATE_KEY', 'API_GATEWAY_CORS_ORIGINS',
+            'AWS_TF_STATE_KEY', 'AWS_RDS_STATE_KEY', 'API_GATEWAY_CORS_ORIGINS',
             'TERRAFORM_APPLY_APPROVAL_CONFIGURED'
         )
         RequiredSecrets = @(
@@ -93,9 +93,8 @@ $script:AutoFlowStateRoots = @(
         Name = 'application'
         Repository = 'autoflow'
         KeyVariable = 'AWS_TF_STATE_KEY'
-        # Este e o default atual de autoflow/infra/vars.tf; o workflow nao o substitui.
-        ConsumeDefaults = @{ rds = 'rds/terraform.tfstate' }
-        ConsumeVariables = @{}
+        ConsumeDefaults = @{}
+        ConsumeVariables = @{ rds = 'AWS_RDS_STATE_KEY' }
     },
     [pscustomobject]@{
         Name = 'api_gateway'

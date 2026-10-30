@@ -137,6 +137,8 @@ function New-AutoFlowRecommendations {
             }
         } elseif ($finding.State -eq 'UNKNOWN') {
             [void]$recommendations.Add("Conceder somente as permissoes GitHub de leitura necessarias ou repetir a consulta de $($finding.Repository)/$($finding.Environment); UNKNOWN nao significa ausente.")
+        } elseif ($finding.State -eq 'OPERATIONAL_BLOCKED') {
+            [void]$recommendations.Add("O Apply de $($finding.Repository)/$($finding.Environment) permanece bloqueado intencionalmente; mantenha TERRAFORM_APPLY_APPROVAL_CONFIGURED=false e os gates nativos da pipeline.")
         }
     }
     foreach ($dependency in @($Dependencies | Where-Object { $_.State -eq 'POTENTIAL_BLOCKER' -or $_.State -eq 'WAITING' })) {
@@ -342,6 +344,7 @@ function Get-AutoFlowExitCode {
     if ($Validation) {
         if ($Validation.HasQueryErrors -or $Validation.HasUnknown) { return 3 }
         if ($Validation.HasInconsistencies) { return 1 }
+        if ($Validation.HasOperationalBlocks) { return 4 }
     }
     return 0
 }
