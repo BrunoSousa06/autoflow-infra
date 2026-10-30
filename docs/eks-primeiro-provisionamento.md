@@ -4,9 +4,9 @@ O workflow `Pipeline` e o root `infra/` gerenciam somente VPC, rede, EKS e node 
 
 ## Preparação dos Environments e States
 
-1. Confirme/reative o AWS Academy Learner Lab. Configure os GitHub Environments `homolog` e `production` com conta esperada, região, bucket, State Keys e credenciais temporárias próprias do Environment. Configure Required reviewers efetivos em cada Environment que protegerá operações AWS.
+1. Confirme/reative o AWS Academy Learner Lab. Configure os GitHub Environments `homolog` e `production` com conta esperada, região, bucket, State Keys e credenciais temporárias próprias do Environment. Audite Required reviewers e branch policies com uma identidade administrativa autorizada antes de definir `TERRAFORM_APPLY_APPROVAL_CONFIGURED=true` em cada Environment.
 2. Valide a matriz externa dos seis Terraform roots (`vpc_eks`, `rds`, `lambda`, `application`, `api_gateway` e `newrelic`) com `python scripts/terraform_state_contract.py <caminho-externo-para-configuracao.json>`. Use uma key distinta por root e Environment e confirme as relações de State dos consumidores. O validador é local e não prova que os States existam na AWS. As Variables e limitações por root estão em [arquitetura — States e ownership](api-gateway/arquitetura.md#states-e-ownership).
-3. Execute o [bootstrap isolado do bucket Terraform State](state-bucket-bootstrap.md) em `develop` para `homolog` ou `main` para `production`. Use somente `approve_state_bucket_creation=true`; mantenha `apply`, `approve_eks_state_reconciliation` e `allow_destructive` em `false`. O job verifica a conta STS e o bucket, e não inicia Plan, Apply ou Terraform init. A aprovação nativa do Environment e Required reviewers continuam obrigatórios.
+3. Execute o [bootstrap isolado do bucket Terraform State](state-bucket-bootstrap.md) em `develop` para `homolog` ou `main` para `production`. Use somente `approve_state_bucket_creation=true`; mantenha `apply`, `approve_eks_state_reconciliation` e `allow_destructive` em `false`. O job verifica os valores obrigatórios e a conta STS, e não inicia Plan, Apply ou Terraform init. A aprovação nativa do Environment continua obrigatória; a configuração de Required reviewers deve ter sido auditada externamente.
 
 ## Sequência de provisionamento
 

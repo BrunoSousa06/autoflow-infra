@@ -303,7 +303,9 @@ class EndpointAccessTests(unittest.TestCase):
         self.assertIn(selected_environment, apply)
         self.assertIn("AWS_REGION: ${{ vars.AWS_REGION }}", plan)
         self.assertIn("AWS_REGION: ${{ vars.AWS_REGION }}", apply)
-        self.assertIn("required_reviewers", apply)
+        self.assertIn("environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}", apply)
+        self.assertIn("scripts/validate_github_environment.py", apply)
+        self.assertIn("--approval-gate", apply)
 
     def test_develop_push_plans_and_applies_only_after_environment_approval(self):
         from pathlib import Path

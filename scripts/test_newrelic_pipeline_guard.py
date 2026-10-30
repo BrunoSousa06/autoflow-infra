@@ -382,11 +382,10 @@ class NewRelicPipelineGuardTests(unittest.TestCase):
         credentials_position = plan.index("aws-actions/configure-aws-credentials@v4")
 
         self.assertIn("AWS_TF_STATE_KEY_INFRA: ${{ vars.AWS_TF_STATE_KEY_INFRA }}", job_env)
-        self.assertIn('test -n "$AWS_TF_STATE_KEY_INFRA"', validation)
-        self.assertIn('[[ "$AWS_EXPECTED_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]', validation)
-        self.assertIn('[[ "$TF_STATE_KEY" == "$GITHUB_DEPLOYMENT_ENVIRONMENT/"* ]]', validation)
-        self.assertIn('test "$APPROVAL_CONFIGURED" = true', validation)
-        self.assertIn('test "$REVIEWERS" -gt 0', validation)
+        self.assertIn("--state-key AWS_TF_STATE_KEY_INFRA", validation)
+        self.assertIn("AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}", job_env)
+        self.assertIn('[[ "$TF_VAR_newrelic_region" == US || "$TF_VAR_newrelic_region" == EU ]]', validation)
+        self.assertIn("--approval-gate", validation)
         self.assertLess(plan.index("Validar configuração antes de acessar AWS"), credentials_position)
 
     def test_production_push_waits_for_explicit_state_bootstrap_then_runs_continuous_apply(self):
@@ -403,7 +402,7 @@ class NewRelicPipelineGuardTests(unittest.TestCase):
         self.assertIn('echo "initialized=false" >> "$GITHUB_OUTPUT"', plan)
         self.assertIn("github.event_name == 'push' && needs.plan.outputs.initialized == 'true'", apply)
         self.assertIn("github.event_name == 'workflow_dispatch' && inputs.apply", apply)
-        self.assertLess(apply.index("Validar conta e aprovação efetiva"), apply.index("aws-actions/configure-aws-credentials@v4"))
+        self.assertLess(apply.index("Validar configuração e gate de aprovação"), apply.index("aws-actions/configure-aws-credentials@v4"))
         self.assertIn('aws s3api head-bucket --bucket "$TF_STATE_BUCKET" --expected-bucket-owner "$AWS_EXPECTED_ACCOUNT_ID"', plan)
         self.assertIn('aws eks describe-cluster --name "$EKS_CLUSTER_NAME"', plan)
         self.assertNotIn("aws eks list-clusters", content)

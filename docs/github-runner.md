@@ -10,17 +10,39 @@ O endpoint privado permanece habilitado. O CIDR permanente inicial está definid
 
 ## Plan, aprovação e Apply
 
-O Plan é armazenado como artifact criptografado por AES-256, com passphrase em secret do GitHub, checksum, fingerprint e commit/run associados. O Apply baixa o artifact exclusivamente da mesma execução, verifica esses vínculos e aplica exatamente o arquivo aprovado. Os jobs Plan e Apply usam o Environment selecionado; em `main`, a branch precisa estar protegida e `production` requer Required reviewers efetivos. Exclusões e substituições continuam bloqueadas a menos que `allow_destructive` seja explicitamente selecionado no dispatch.
+O Plan é armazenado como artifact criptografado por AES-256, com passphrase em secret do GitHub, checksum, fingerprint e commit/run associados. O Apply baixa o artifact exclusivamente da mesma execução, verifica esses vínculos e aplica exatamente o arquivo aprovado. Os jobs Plan e Apply usam o Environment selecionado; a proteção nativa desse Environment continua responsável por aguardar Required reviewers. Em `main`, a branch também precisa estar protegida. Exclusões e substituições continuam bloqueadas a menos que `allow_destructive` seja explicitamente selecionado no dispatch.
 
-O bootstrap do backend S3 é um job independente: `workflow_dispatch` com `approve_state_bucket_creation=true` exige a aprovação nativa do Environment e uma verificação explícita dos Required reviewers efetivos. Esse dispatch ignora `validate`, Plan, Apply e Terraform init. Deixe `apply`, `approve_eks_state_reconciliation` e `allow_destructive` em `false`; detalhes e comandos documentais estão no [runbook do bucket](state-bucket-bootstrap.md).
+O bootstrap do backend S3 é um job independente: `workflow_dispatch` com `approve_state_bucket_creation=true` exige a aprovação nativa do Environment. Esse dispatch ignora `validate`, Plan, Apply e Terraform init. Antes da execução, o preflight valida os valores não vazios recebidos diretamente dos contextos `vars` e `secrets`, a conta, região, bucket e o gate adicional `TERRAFORM_APPLY_APPROVAL_CONFIGURED=true`. Deixe `apply`, `approve_eks_state_reconciliation` e `allow_destructive` em `false`; detalhes e comandos documentais estão no [runbook do bucket](state-bucket-bootstrap.md).
 
 ## Configuração necessária no GitHub
 
-No repositório `autoflow-infra`, configure no GitHub Environment selecionado (`homolog` ou `production`) `AWS_REGION`, `AWS_EXPECTED_ACCOUNT_ID`, `AWS_TERRAFORM_STATE_BUCKET`, `AWS_TF_STATE_KEY_INFRA` e `TERRAFORM_APPLY_APPROVAL_CONFIGURED`. As State Keys precisam usar o prefixo do Environment e ter sufixos distintos por root. O workflow rejeita configuração ausente no Environment, ainda que exista uma Repository Variable com o mesmo nome. Configure também nesse Environment os Secrets `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` e `TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE`; não use um conjunto de credenciais de escopo de repositório compartilhado entre ambientes.
+No repositório `autoflow-infra`, configure em cada GitHub Environment (`homolog` ou `production`) `AWS_REGION`, `AWS_EXPECTED_ACCOUNT_ID`, `AWS_TERRAFORM_STATE_BUCKET`, as State Keys do root e `TERRAFORM_APPLY_APPROVAL_CONFIGURED`. As State Keys precisam usar o prefixo do Environment e ter sufixos distintos por root. Os preflights verificam valores não vazios e não consultam APIs administrativas para listar Variables ou Secrets. Configure também em cada Environment os Secrets `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` e `TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE`; as credenciais AWS são validadas contra a conta esperada antes de operações AWS.
 
 O Plan descobre uma única Cluster Role e Node Role na conta validada por STS, conferindo trust policies e AWS managed policies obrigatórias; os ARNs não são cadastrados manualmente. O Apply valida e reutiliza os ARNs embutidos no Plan aprovado, sem redescobrir ou substituir roles. A role operador não é cadastrada: cada job a resolve pela sessão AWS atual com `sts:GetCallerIdentity` e `iam:ListRoles`, exigindo correspondência única de conta, RoleId e separação das roles EKS.
 
-Configure `homolog` para `develop` e `production` para `main`, com Required reviewers em ambos. O Plan e o Apply são associados ao Environment e consultam reviewers via `GITHUB_TOKEN`; o Apply aguarda a aprovação nativa. A execução production também exige `github.ref_protected`. A role AWS dos Environment Secrets precisa permitir consultar o cluster, atualizar a configuração do endpoint, consultar o status da atualização, usar o State S3 e executar as operações planejadas pelo Terraform. Também precisa de `s3:GetObject`, `s3:PutObject` e `s3:DeleteObject` no objeto de lease do bucket para a reconciliação durável.
+Configure `homolog` para `develop` e `production` para `main`, com Required reviewers e políticas de branch no próprio GitHub Environment. Os jobs Plan, Apply e bootstrap permanecem associados ao Environment selecionado; não há consulta administrativa dessas regras pela pipeline. Antes de definir `TERRAFORM_APPLY_APPROVAL_CONFIGURED=true`, uma identidade administrativa autorizada deve confirmar externamente a lista de Required reviewers e a política de branches. Consulte o procedimento abaixo. A execução production também exige `github.ref_protected`. A role AWS dos Environment Secrets precisa permitir consultar o cluster, atualizar a configuração do endpoint, consultar o status da atualização, usar o State S3 e executar as operações planejadas pelo Terraform. Também precisa de `s3:GetObject`, `s3:PutObject` e `s3:DeleteObject` no objeto de lease do bucket para a reconciliação durável.
+
+## Auditoria administrativa externa
+
+A chamada da REST API de GitHub Environments pela pipeline retornou HTTP 403 (`Resource not accessible by integration`) para `GITHUB_TOKEN`. Os workflows não usam PAT administrativo, permissões elevadas ou outro token para contornar essa restrição. A aprovação continua sendo aplicada pelo mecanismo nativo do Environment; a configuração efetiva de reviewers deve ser auditada fora da pipeline antes de habilitar o gate adicional.
+
+Use uma sessão administrativa aprovada, com autorização de leitura da configuração de Environments (por exemplo, permissão `administration:read` quando aplicável), fora do GitHub Actions. O comando abaixo consulta apenas metadados e informa erro se algum Environment não tiver reviewers:
+
+```bash
+for environment in homolog production; do
+  gh api "repos/autoflow-fiap/autoflow-infra/environments/$environment" --jq '
+    [.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] as $reviewers
+    | if ($reviewers | length) == 0 then error("Required reviewers ausentes") else
+      {
+        environment: .name,
+        required_reviewers_count: ($reviewers | length),
+        deployment_branch_policy: .deployment_branch_policy
+      }
+      end'
+done
+```
+
+Confirme que `homolog` permite o fluxo esperado de `develop`, que `production` está restrito a `main`, que os reviewers são identidades/grupos autorizados e que a branch `main` tem proteção efetiva. Se `deployment_branch_policy` indicar políticas customizadas, confira também na configuração do Environment quais branches estão permitidas. Só depois dessa auditoria defina `TERRAFORM_APPLY_APPROVAL_CONFIGURED=true` separadamente em cada Environment. Não copie credenciais para o repositório ou para os workflows; não use a auditoria para alterar reviewers, branches ou aprovações automaticamente.
 
 ## Limites de validação
 
