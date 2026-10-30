@@ -42,7 +42,7 @@ class GatewayRoutesTest(unittest.TestCase):
         self.assertIn("terraform init -input=false -lockfile=readonly", init_step)
         self.assertIn('backend-config="bucket=$TF_VAR_terraform_state_bucket"', init_step)
         self.assertIn('backend-config="key=$TF_STATE_KEY"', init_step)
-        self.assertIn('backend-config="expected_bucket_owner=$TF_VAR_expected_account_id"', init_step)
+        self.assertIn('backend-config="allowed_account_ids=$TF_VAR_aws_allowed_account_ids"', init_step)
         self.assertLess(apply.index("terraform init -input=false -lockfile=readonly"), apply.index("terraform apply -input=false gateway.tfplan"))
 
     def test_plan_and_apply_verify_the_same_readonly_lockfile(self):

@@ -3,7 +3,7 @@ name: Migração HTTP API
 on:
   pull_request:
     branches: [develop, main]
-    paths: ["infra/api-gateway/**", "scripts/*gateway*", ".github/workflows/api-gateway.yml"]
+    paths: ["infra/api-gateway/**", "scripts/*gateway*", "scripts/test_terraform_backend_config.py", ".github/workflows/api-gateway.yml"]
   push:
     branches: [develop, main, 'feature/**']
     paths: ["infra/api-gateway/**", "scripts/*gateway*"]
@@ -56,6 +56,7 @@ jobs:
         with:
           terraform_version: "1.16.5"
           terraform_wrapper: false
+      - run: python -m unittest discover -s scripts -p test_terraform_backend_config.py -v
       - run: terraform -chdir=infra/api-gateway fmt -check -recursive
       - run: terraform -chdir=infra/api-gateway init -backend=false -input=false
       - run: terraform -chdir=infra/api-gateway validate
@@ -78,6 +79,7 @@ jobs:
       AWS_TERRAFORM_STATE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       TF_VAR_aws_region: ${{ vars.AWS_REGION }}
       TF_VAR_expected_account_id: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
+      TF_VAR_aws_allowed_account_ids: '["${{ vars.AWS_EXPECTED_ACCOUNT_ID }}"]'
       TF_VAR_environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
       TF_VAR_lambda_function_name: autoflow-cpf-validator-${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
       TF_VAR_terraform_state_bucket: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
@@ -164,7 +166,7 @@ jobs:
           if [ "$STATE_STATUS" = state-present ]; then echo "initialized=true" >> "$GITHUB_OUTPUT"; else echo "initialized=false" >> "$GITHUB_OUTPUT"; fi
           python scripts/state_resource_guard.py --bucket "$AWS_TERRAFORM_STATE_BUCKET" --key "$AWS_TF_STATE_KEY_GATEWAY" -- aws elbv2 describe-load-balancers --names "autoflow-${TF_VAR_environment}-private" --query 'LoadBalancers[0].LoadBalancerArn' --output text
           cd infra/api-gateway
-          terraform init -input=false -lockfile=readonly -backend-config="bucket=$TF_VAR_terraform_state_bucket" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="expected_bucket_owner=$TF_VAR_expected_account_id" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+          terraform init -input=false -lockfile=readonly -backend-config="bucket=$TF_VAR_terraform_state_bucket" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="allowed_account_ids=$TF_VAR_aws_allowed_account_ids" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
           cd ../..
           python scripts/prepare_gateway_imports.py --bucket "$TF_VAR_terraform_state_bucket" --key "$TF_STATE_KEY" --region "$AWS_REGION" --name "autoflow-${TF_VAR_environment}" --output infra/api-gateway/gateway-vpc-link-imports.auto.tf
       - name: Gerar e revisar plano
@@ -316,7 +318,7 @@ jobs:
           test "$(aws eks describe-nodegroup --cluster-name "$TF_VAR_cluster_name" --nodegroup-name "$TF_VAR_nodegroup_name" --region "$AWS_REGION" --query nodegroup.status --output text)" = ACTIVE
       - name: Inicializar state exclusivo do gateway
         working-directory: infra/api-gateway
-        run: terraform init -input=false -lockfile=readonly -backend-config="bucket=$TF_VAR_terraform_state_bucket" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="expected_bucket_owner=$TF_VAR_expected_account_id" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+        run: terraform init -input=false -lockfile=readonly -backend-config="bucket=$TF_VAR_terraform_state_bucket" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="allowed_account_ids=$TF_VAR_aws_allowed_account_ids" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
       - name: Aplicar exatamente o plano aprovado
         working-directory: infra/api-gateway
         run: terraform apply -input=false gateway.tfplan

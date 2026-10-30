@@ -16,12 +16,12 @@ class TerraformStateRootContractTests(unittest.TestCase):
         key_variable = (ROOT / "infra/api-gateway/variables.tf").read_text(encoding="utf-8").split('variable "infra_state_key"', 1)[1].split("}", 1)[0]
         self.assertNotIn("default", key_variable)
 
-    def test_gateway_backend_pins_owner_and_remote_state_is_preflighted(self):
+    def test_gateway_backend_uses_account_allowlist_and_remote_state_is_preflighted(self):
         gateway_data = (ROOT / "infra/api-gateway/main.tf").read_text(encoding="utf-8")
         self.assertNotIn("expected_bucket_owner", gateway_data)
-        self.assertGreaterEqual(GATEWAY.count('expected_bucket_owner=$TF_VAR_expected_account_id'), 2)
+        self.assertGreaterEqual(GATEWAY.count('allowed_account_ids=$TF_VAR_aws_allowed_account_ids'), 2)
         self.assertGreaterEqual(GATEWAY.count('aws s3api head-object --bucket "$TF_VAR_terraform_state_bucket" --key "$TF_VAR_infra_state_key" --expected-bucket-owner "$TF_VAR_expected_account_id"'), 2)
-        self.assertIn('expected_bucket_owner=$AWS_EXPECTED_ACCOUNT_ID', PIPELINE)
+        self.assertIn('allowed_account_ids=$TF_VAR_aws_allowed_account_ids', PIPELINE)
 
     def test_gateway_state_key_is_required_and_has_no_legacy_default(self):
         variables = (ROOT / "infra/api-gateway/variables.tf").read_text(encoding="utf-8")
