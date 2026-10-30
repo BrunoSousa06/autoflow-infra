@@ -260,8 +260,13 @@ function Get-AutoFlowEnvironmentSnapshot {
                 Add-AutoFlowFinding $Findings 'EMPTY_VARIABLE' 'INCONSISTENT' $RepositoryConfig.Name $Environment "Variable obrigatoria sem valor: $name."
             }
         }
-        if ($snapshot.Variables.ContainsKey('TERRAFORM_APPLY_APPROVAL_CONFIGURED') -and $snapshot.Variables['TERRAFORM_APPLY_APPROVAL_CONFIGURED'] -cne 'true') {
-            Add-AutoFlowFinding $Findings 'APPROVAL_MARKER_NOT_TRUE' 'INCONSISTENT' $RepositoryConfig.Name $Environment 'TERRAFORM_APPLY_APPROVAL_CONFIGURED nao esta definido exatamente como true.'
+        if ($snapshot.Variables.ContainsKey('TERRAFORM_APPLY_APPROVAL_CONFIGURED')) {
+            $approvalMarker = [string]$snapshot.Variables['TERRAFORM_APPLY_APPROVAL_CONFIGURED']
+            if ($approvalMarker -ceq 'false') {
+                Add-AutoFlowFinding $Findings 'APPLY_APPROVAL_DISABLED' 'OPERATIONAL_BLOCKED' $RepositoryConfig.Name $Environment 'TERRAFORM_APPLY_APPROVAL_CONFIGURED=false; o Apply permanece bloqueado intencionalmente pelo gate da pipeline.'
+            } elseif ($approvalMarker -cne 'true' -and -not [string]::IsNullOrWhiteSpace($approvalMarker)) {
+                Add-AutoFlowFinding $Findings 'APPROVAL_MARKER_INVALID' 'INCONSISTENT' $RepositoryConfig.Name $Environment 'TERRAFORM_APPLY_APPROVAL_CONFIGURED deve ser exatamente true ou false.'
+            }
         }
         if ($snapshot.Variables.ContainsKey('AWS_EXPECTED_ACCOUNT_ID') -and $snapshot.Variables['AWS_EXPECTED_ACCOUNT_ID'] -notmatch '^[0-9]{12}$') {
             Add-AutoFlowFinding $Findings 'AWS_ACCOUNT_FORMAT_INVALID' 'INCONSISTENT' $RepositoryConfig.Name $Environment 'AWS_EXPECTED_ACCOUNT_ID nao tem 12 digitos.'
@@ -494,6 +499,7 @@ function Invoke-AutoFlowValidation {
 
     $inconsistent = @($findings | Where-Object { $_.State -eq 'INCONSISTENT' }).Count -gt 0
     $unknown = @($findings | Where-Object { $_.State -eq 'UNKNOWN' }).Count -gt 0
+    $operationallyBlocked = @($findings | Where-Object { $_.State -eq 'OPERATIONAL_BLOCKED' }).Count -gt 0
     return [pscustomobject]@{
         Environment = $Environment
         EnvironmentsChecked = @(Get-AutoFlowEnvironmentNames)
@@ -510,6 +516,7 @@ function Invoke-AutoFlowValidation {
         QueryErrors = @($queryErrors.ToArray())
         HasInconsistencies = $inconsistent
         HasUnknown = $unknown
+        HasOperationalBlocks = $operationallyBlocked
         HasQueryErrors = ($queryErrors.Count -gt 0)
     }
 }

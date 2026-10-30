@@ -89,6 +89,7 @@ function New-SyntheticStateContract {
 }
 
 function New-ValidationApiMock {
+    param([string]$ApprovalMarker = 'true')
     $requestList = New-Object System.Collections.Generic.List[string]
     $variableMap = @{}
     $resultFactory = {
@@ -112,7 +113,7 @@ function New-ValidationApiMock {
             $values['AWS_EXPECTED_ACCOUNT_ID'] = $account
             $values['AWS_REGION'] = 'us-east-1'
             $values['AWS_TERRAFORM_STATE_BUCKET'] = "autoflow-$environmentName-state"
-            $values['TERRAFORM_APPLY_APPROVAL_CONFIGURED'] = 'true'
+            $values['TERRAFORM_APPLY_APPROVAL_CONFIGURED'] = $ApprovalMarker
             if ($repository.Name -eq 'autoflow-infra') {
                 $values['AWS_TF_STATE_KEY_INFRA'] = $environmentRoots.vpc_eks
                 $values['AWS_TF_STATE_KEY_GATEWAY'] = $environmentRoots.api_gateway
@@ -129,6 +130,7 @@ function New-ValidationApiMock {
                 $values['AWS_LAMBDA_EXECUTION_ROLE_ARN'] = "arn:aws:iam::$account:role/synthetic"
             } else {
                 $values['AWS_TF_STATE_KEY'] = $environmentRoots.application
+                $values['AWS_RDS_STATE_KEY'] = $environmentRoots.rds
                 $values['API_GATEWAY_CORS_ORIGINS'] = '[]'
             }
             $variableMap["$($repository.Name)|$environmentName"] = $values
@@ -276,10 +278,49 @@ Describe 'AutoFlow Pipeline Orchestrator' {
         $script:MockRequests -join "`n" | Should Match '/environments/homolog/variables'
         $script:MockRequests -join "`n" | Should Match '/environments/production/secrets'
         $script:MockRequests -join "`n" | Should Match '/environments/homolog/secrets'
-        @($validation.Findings | Where-Object { $_.Code -eq 'TERRAFORM_STATE_CONTRACT_INVALID' }).Count | Should Be 1
+        $validation.StateContract.State | Should Be 'VALID'
+        @($validation.Findings | Where-Object { $_.Code -eq 'TERRAFORM_STATE_CONTRACT_INVALID' }).Count | Should Be 0
         $secretEntry = @($validation.Repositories[0].Environments[0].SecretNames | Where-Object { $_ -eq 'AWS_SESSION_TOKEN' })
         $secretEntry.Count | Should Be 1
         $validation.Repositories[0].Environments[0].PSObject.Properties['SecretValues'] | Should Be $null
+    }
+
+    It 'maps application RDS references to the producer key in homolog and production' {
+        $validation = Invoke-AutoFlowValidation -Environment homolog -ApiInvoker (New-ValidationApiMock)
+        $snapshots = @{}
+        foreach ($repository in $validation.Repositories) {
+            foreach ($snapshot in $repository.Environments) {
+                $snapshots["$($repository.Name)|$($snapshot.Environment)"] = $snapshot
+            }
+        }
+        $contractInput = Get-AutoFlowStateContractInput -Snapshots $snapshots -Findings (New-Object 'System.Collections.Generic.List[object]') -Environments @('homolog', 'production')
+        $contractInput.Complete | Should Be $true
+        foreach ($environment in @('homolog', 'production')) {
+            $roots = $contractInput.Document.environments[$environment].roots
+            $roots.rds.consumes.vpc_eks | Should Be $roots.vpc_eks.key
+            $roots.lambda.consumes.vpc_eks | Should Be $roots.vpc_eks.key
+            $roots.lambda.consumes.rds | Should Be $roots.rds.key
+            $roots.application.consumes.rds | Should Be $roots.rds.key
+            $roots.application.consumes.rds | Should Be $script:ValidationVariables["autoflow|$environment"]['AWS_RDS_STATE_KEY']
+            $roots.api_gateway.consumes.vpc_eks | Should Be $roots.vpc_eks.key
+            $roots.newrelic.consumes.vpc_eks | Should Be $roots.vpc_eks.key
+        }
+        (Invoke-AutoFlowStateContract -Document $contractInput.Document).State | Should Be 'VALID'
+    }
+
+    It 'reports an explicit false apply marker as an operational block, while rejecting malformed values' {
+        $validation = Invoke-AutoFlowValidation -Environment homolog -ApiInvoker (New-ValidationApiMock -ApprovalMarker 'false')
+        @($validation.Findings | Where-Object { $_.Code -eq 'APPLY_APPROVAL_DISABLED' -and $_.State -eq 'OPERATIONAL_BLOCKED' }).Count | Should Be 8
+        @($validation.Findings | Where-Object { $_.Code -eq 'APPROVAL_MARKER_INVALID' }).Count | Should Be 0
+        $validation.HasInconsistencies | Should Be $false
+        $validation.HasUnknown | Should Be $false
+        (Get-AutoFlowExitCode -Action validate -Validation $validation) | Should Be 4
+
+        $transport = New-ValidationApiMock
+        $script:ValidationVariables['autoflow|homolog']['TERRAFORM_APPLY_APPROVAL_CONFIGURED'] = 'FALSE'
+        $malformed = Invoke-AutoFlowValidation -Environment homolog -ApiInvoker $transport
+        @($malformed.Findings | Where-Object { $_.Code -eq 'APPROVAL_MARKER_INVALID' -and $_.State -eq 'INCONSISTENT' }).Count | Should Be 1
+        $malformed.HasInconsistencies | Should Be $true
     }
 
     It 'does not mark Environments missing when inventory is inaccessible or hidden by a 404' {
@@ -333,14 +374,16 @@ Describe 'AutoFlow Pipeline Orchestrator' {
     It 'returns stable process exit codes for success, inconsistency and query errors' {
         $cleanStatus = [pscustomobject]@{ HasQueryErrors = $false }
         $failedStatus = [pscustomobject]@{ HasQueryErrors = $true }
-        $cleanValidation = [pscustomobject]@{ HasQueryErrors = $false; HasUnknown = $false; HasInconsistencies = $false }
-        $invalidValidation = [pscustomobject]@{ HasQueryErrors = $false; HasUnknown = $false; HasInconsistencies = $true }
-        $unknownValidation = [pscustomobject]@{ HasQueryErrors = $false; HasUnknown = $true; HasInconsistencies = $false }
+        $cleanValidation = [pscustomobject]@{ HasQueryErrors = $false; HasUnknown = $false; HasInconsistencies = $false; HasOperationalBlocks = $false }
+        $invalidValidation = [pscustomobject]@{ HasQueryErrors = $false; HasUnknown = $false; HasInconsistencies = $true; HasOperationalBlocks = $false }
+        $unknownValidation = [pscustomobject]@{ HasQueryErrors = $false; HasUnknown = $true; HasInconsistencies = $false; HasOperationalBlocks = $false }
+        $blockedValidation = [pscustomobject]@{ HasQueryErrors = $false; HasUnknown = $false; HasInconsistencies = $false; HasOperationalBlocks = $true }
         (Get-AutoFlowExitCode -Action status -Status $cleanStatus) | Should Be 0
         (Get-AutoFlowExitCode -Action status -Status $failedStatus) | Should Be 3
         (Get-AutoFlowExitCode -Action validate -Validation $cleanValidation) | Should Be 0
         (Get-AutoFlowExitCode -Action validate -Validation $invalidValidation) | Should Be 1
         (Get-AutoFlowExitCode -Action validate -Validation $unknownValidation) | Should Be 3
+        (Get-AutoFlowExitCode -Action validate -Validation $blockedValidation) | Should Be 4
     }
 
     It 'renders JSON and Markdown without variable values or a UTF-8 BOM' {

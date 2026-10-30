@@ -36,7 +36,8 @@
 | `UNKNOWN` | Não tratar como ausência ou aprovação. Repetir a consulta ou verificar manualmente com acesso autorizado. |
 | `REQUIRED_REVIEWERS_MISSING` | Revisar manualmente proteção e reviewers no GitHub Environment. A ferramenta não configura nem aprova a proteção. |
 | `BRANCH_POLICY_*` | Confirmar se a política configurada admite somente a branch correspondente (`develop`/`main`) e se a branch exigida existe/está protegida. |
-| `APPROVAL_MARKER_NOT_TRUE` | Revisar `TERRAFORM_APPLY_APPROVAL_CONFIGURED` e os reviewers reais no GitHub Environment; o marcador não substitui a regra nativa. |
+| `APPLY_APPROVAL_DISABLED` (`OPERATIONAL_BLOCKED`) | `TERRAFORM_APPLY_APPROVAL_CONFIGURED=false` bloqueia o Apply intencionalmente. Mantenha o valor e os gates nativos; o Orchestrator não autoriza nem contorna o bloqueio. |
+| `APPROVAL_MARKER_INVALID` | Corrigir o valor para `true` ou `false`; não habilitar `true` sem a auditoria dos reviewers e branch policy. |
 | `TERRAFORM_STATE_CONTRACT_INVALID` | Comparar as seis State Keys e as referências produtor/consumidor das Variables nos dois ambientes. Use o resultado do validador existente; não edite States remotos. |
 | `failure`, `cancelled` ou `skipped` | Abrir manualmente a URL do run/job e inspecionar o GitHub Actions. O orquestrador não baixa logs nem reexecuta workflows. |
 | `waiting` | Verificar o run e a página do Environment no GitHub. A resposta pode não revelar o motivo nem o aprovador. |
