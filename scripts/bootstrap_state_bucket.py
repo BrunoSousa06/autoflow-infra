@@ -1,12 +1,13 @@
 """Bootstrap explícito e idempotente do bucket de Terraform State."""
 
 import argparse
+import json
 import os
 import re
 import subprocess
 import sys
 
-from resolve_state_bucket import resolve_state_bucket
+from verify_aws_account import validate_account
 
 
 def run(*args):
@@ -14,9 +15,12 @@ def run(*args):
 
 
 def bootstrap(bucket, region, expected_owner, approve_create):
-    if not region or not expected_owner or not expected_owner.isdigit() or len(expected_owner) != 12:
-        raise ValueError("Bucket, região e AWS_EXPECTED_ACCOUNT_ID válidos são obrigatórios.")
-    bucket = resolve_state_bucket(bucket, expected_owner, region)
+    if not bucket or not bucket.strip() or not region or not expected_owner:
+        raise ValueError("AWS_TERRAFORM_STATE_BUCKET, AWS_REGION e AWS_EXPECTED_ACCOUNT_ID são obrigatórios.")
+    bucket = bucket.strip()
+    identity = run("sts", "get-caller-identity", "--query", "Account", "--output", "text")
+    validate_account(expected_owner, identity.stdout.strip())
+
     created = False
     try:
         run("s3api", "head-bucket", "--bucket", bucket, "--expected-bucket-owner", expected_owner, "--region", region)
@@ -33,7 +37,8 @@ def bootstrap(bucket, region, expected_owner, approve_create):
             args += ["--create-bucket-configuration", f"LocationConstraint={region}"]
         run(*args)
         created = True
-    # Existing buckets are read-only: do not silently alter their controls.
+
+    # Buckets preexistentes são somente leitura; apenas o recém-criado recebe configuração.
     settings = (
         ("s3api", "put-public-access-block", "--bucket", bucket, "--expected-bucket-owner", expected_owner,
          "--public-access-block-configuration", "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true", "--region", region),
@@ -45,17 +50,53 @@ def bootstrap(bucket, region, expected_owner, approve_create):
     if created:
         for args in settings:
             run(*args)
-    else:
-        actual = (
-            run("s3api", "get-public-access-block", "--bucket", bucket, "--expected-bucket-owner", expected_owner, "--region", region).stdout,
-            run("s3api", "get-bucket-versioning", "--bucket", bucket, "--expected-bucket-owner", expected_owner, "--region", region).stdout,
-            run("s3api", "get-bucket-encryption", "--bucket", bucket, "--expected-bucket-owner", expected_owner, "--region", region).stdout,
-        )
-        required = ("BlockPublicAcls", "IgnorePublicAcls", "BlockPublicPolicy", "RestrictPublicBuckets", "Enabled", "AES256")
-        if not all(value in " ".join(actual) for value in required):
-            raise RuntimeError("Bucket existente não atende aos controles exigidos; nenhuma configuração foi alterada.")
+
+    controls = _read_bucket_controls(bucket, region, expected_owner)
+    if not _has_required_controls(*controls):
+        raise RuntimeError("Bucket existente não atende aos controles exigidos; nenhuma configuração foi alterada.")
+
     # Never write/copy/delete Terraform state objects.
     run("s3api", "head-bucket", "--bucket", bucket, "--expected-bucket-owner", expected_owner, "--region", region)
+
+
+def _read_bucket_controls(bucket, region, expected_owner):
+    common = ("--bucket", bucket, "--expected-bucket-owner", expected_owner, "--region", region)
+    return (
+        json.loads(run("s3api", "get-public-access-block", *common).stdout),
+        json.loads(run("s3api", "get-bucket-versioning", *common).stdout),
+        json.loads(run("s3api", "get-bucket-encryption", *common).stdout),
+    )
+
+
+def _has_required_controls(public_access, versioning, encryption):
+    if not all(isinstance(value, dict) for value in (public_access, versioning, encryption)):
+        return False
+    public_block = public_access.get("PublicAccessBlockConfiguration", {})
+    if not isinstance(public_block, dict):
+        return False
+    required_public_controls = (
+        "BlockPublicAcls",
+        "IgnorePublicAcls",
+        "BlockPublicPolicy",
+        "RestrictPublicBuckets",
+    )
+    if not all(public_block.get(name) is True for name in required_public_controls):
+        return False
+    if versioning.get("Status") != "Enabled":
+        return False
+
+    encryption_config = encryption.get("ServerSideEncryptionConfiguration", {})
+    if not isinstance(encryption_config, dict):
+        return False
+    encryption_rules = encryption_config.get("Rules", [])
+    if not isinstance(encryption_rules, list) or len(encryption_rules) != 1:
+        return False
+    if not isinstance(encryption_rules[0], dict) or encryption_rules[0].get("Filter"):
+        return False
+    encryption_default = encryption_rules[0].get("ApplyServerSideEncryptionByDefault", {})
+    if not isinstance(encryption_default, dict):
+        return False
+    return encryption_default.get("SSEAlgorithm") == "AES256" and not encryption_default.get("SSEKMSKeyId")
 
 
 def main():

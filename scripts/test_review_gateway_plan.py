@@ -162,7 +162,8 @@ class ReviewGatewayPlanTest(unittest.TestCase):
     def test_gateway_workflow_forwards_dispatch_authorization_to_reviewer(self):
         from pathlib import Path
         workflow = (Path(__file__).parents[1] / ".github/workflows/api-gateway.yml").read_text(encoding="utf-8")
-        self.assertIn("ALLOW_DESTRUCTIVE: ${{ github.ref == 'refs/heads/develop' && (github.event_name == 'push' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false')) || 'false' }}", workflow)
+        self.assertIn("ALLOW_DESTRUCTIVE: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false' }}", workflow)
+        self.assertNotIn("github.event_name == 'push' && 'true'", workflow)
         self.assertIn('ALLOW_DESTRUCTIVE="$ALLOW_DESTRUCTIVE" python ../../scripts/review_gateway_plan.py gateway.tfplan', workflow)
 
     def test_rejeita_substituicao_nao_autorizada(self):

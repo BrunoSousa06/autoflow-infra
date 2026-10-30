@@ -19,8 +19,8 @@ variable "terraform_state_bucket" {
   description = "Bucket existente, provisionado fora deste state."
 }
 variable "infra_state_key" {
-  type    = string
-  default = "eks/terraform.tfstate"
+  type        = string
+  description = "Key externa do State VPC/EKS deste mesmo Environment."
 }
 variable "cluster_name" {
   type    = string

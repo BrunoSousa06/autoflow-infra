@@ -1,12 +1,16 @@
 # Variables e secrets
 
-Inventário observado nos workflows e Terraform deste repositório. Os workflows selecionam o Environment `homolog` em `develop` e `production` em `main`; Apply exige dispatch manual e a proteção do Environment. New Relic é consumido apenas por `newrelic.yml`. Após reset do Learner Lab, reexecute as pipelines CI/CD correspondentes para provisionar novamente os recursos. CI de PR não requer acesso AWS.
+Inventário observado nos workflows e Terraform deste repositório. `develop` seleciona o Environment `homolog`; `main`, `production`. Os nomes dos recursos EKS são derivados do ambiente. Apply exige configuração completa e proteção efetiva do Environment. O primeiro Apply de API Gateway e New Relic é dispatch explícito depois das dependências; após existir state, mudanças correspondentes em `main` seguem CD automático. CI de PR não requer acesso AWS.
+
+No workflow `Pipeline`, `workflow_dispatch` com `approve_state_bucket_creation=true` executa somente o job isolado de bootstrap do bucket: `validate`, Plan e Apply são ignorados. O job é limitado a `develop`/`homolog` e `main`/`production`, usa as Variables e Secrets do Environment selecionado e exige Required reviewers efetivos. Consulte o [procedimento de bootstrap do bucket](state-bucket-bootstrap.md).
+
+Os três nomes não são intercambiáveis: `approve_state_bucket_creation` é o input booleano temporário que autoriza o job independente; `APPROVE_CREATE` era uma Environment Variable do fluxo antigo dentro do Plan e não é lida pelo workflow atual; `TERRAFORM_APPLY_APPROVAL_CONFIGURED=true` é um marcador de configuração adicional, exigido junto com Required reviewers reais, mas não substitui a aprovação nativa. Durante o bootstrap, mantenha `apply`, `approve_eks_state_reconciliation` e `allow_destructive` em `false`.
 
 ## GitHub Actions — Secrets
 
 | Nome | Tipo / finalidade | Onde configurar; origem | CI / CD | Exemplo seguro | Consumidor; default/ausência |
 |---|---|---|---|---|---|
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | Secrets; sessão temporária AWS | Repository Secrets; mesma sessão AWS Academy Learner Lab | CD | Não aplicável | `.github/workflows/pipeline.yml`, `api-gateway.yml`; usados pelos jobs de Plan e Apply, sem defaults. |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | Secrets; sessão temporária AWS | Environment Secrets `homolog` e `production`; os três devem pertencer à mesma sessão Learner Lab | CD | Não aplicável | Jobs de Plan, Apply e bootstrap nos workflows de infraestrutura. O bootstrap os usa somente depois de validar o Environment e os Required reviewers. Não usar credenciais de uma conta com `AWS_EXPECTED_ACCOUNT_ID` de outra. |
 | `TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE` | Secret para cifrar o Plan Terraform entre os jobs Plan/Apply | Environment Secrets `homolog` e `production`; mesmo valor nos jobs do mesmo Environment | Plan/Apply | Não aplicável | `pipeline.yml` e `newrelic.yml`; obrigatório, sem default. Não registrar em logs nem artifacts em texto claro. |
 | `AUTOFLOW_READ_TOKEN` | Secret opcional para checkout do contrato `autoflow` | GitHub Repository secret; token de leitura se o repo for privado | CI de gateway | Não aplicável | `api-gateway.yml`; fallback `${{ github.token }}`. Se token padrão tiver acesso, não cadastrar. |
 | `GITHUB_TOKEN` (`github.token`) | Token automático de checkout pelo workflow | Gerado pelo GitHub; não cadastrar | CI | Não aplicável | `api-gateway.yml`; default para checkout do contrato. |
@@ -16,22 +20,23 @@ Inventário observado nos workflows e Terraform deste repositório. Os workflows
 
 | Nome | Finalidade | Onde; origem | CI / CD | Exemplo seguro | Consumidor; default/ausência |
 |---|---|---|---|---|---|
-| `AWS_REGION` | Região AWS | Repository Variable | CD | `us-east-1` | Ambos workflows de deploy; obrigatória, sem default. |
-| `AWS_EXPECTED_ACCOUNT_ID` | Conta permitida pelos guards | Repository Variable | CD | `123456789012` | Ambos; obrigatória, sem default. |
-| `AWS_TERRAFORM_STATE_BUCKET` | Bucket S3 compartilhado pelos roots Terraform | Repository Variable, quando configurada | CD | Nome derivado do account ID e região | Bootstrap prioriza este valor; quando ausente, usa `autoflow-tfstate-learnerlab-<AWS_EXPECTED_ACCOUNT_ID>-<AWS_REGION>`. |
-| `AWS_TF_STATE_KEY_INFRA` | Key state VPC/EKS | Repository Variable | CD | `homolog/infra/terraform.tfstate` | `pipeline.yml` e input state remoto em `api-gateway.yml`; obrigatória. |
-| `AWS_TF_STATE_KEY_NEWRELIC` | Key exclusiva de state New Relic no bucket já utilizado | Environment Variable em `homolog` e `production` | Plan/Apply New Relic | `homolog/newrelic/terraform.tfstate` | `newrelic.yml`; necessária em cada Environment, sem default. Use keys distintas por Environment. |
-| `AWS_TF_STATE_KEY_GATEWAY` | Key exclusiva do state API Gateway | Repository Variable | CD | `homolog/api-gateway/terraform.tfstate` | `api-gateway.yml`; obrigatória, sem default. |
-| `API_GATEWAY_CORS_ORIGINS` | Lista JSON de origens HTTPS CORS | Repository Variable | CD | `[]` | `api-gateway.yml`; obrigatória no shell preflight, sem default; array JSON. |
+| `AWS_REGION` | Região AWS | Environment Variable em `homolog` e `production` | CD | `us-east-1` | Obrigatória; o job de bootstrap valida a configuração antes do acesso AWS. |
+| `AWS_EXPECTED_ACCOUNT_ID` | Conta AWS autorizada | Environment Variable em cada Environment; ID decimal com 12 dígitos | CD | Não aplicável | Obrigatória; o bootstrap compara a identidade STS antes de qualquer escrita e exige que o proprietário do bucket corresponda a esta conta. |
+| `AWS_TERRAFORM_STATE_BUCKET` | Bucket S3 para os roots Terraform daquele ambiente | Environment Variable em cada Environment | CD | Nome do bucket da conta selecionada | Obrigatória e sem derivação automática. O bootstrap valida proprietário, bloqueio de acesso público, versionamento e criptografia; bucket existente incompatível não é alterado automaticamente. |
+| `AWS_TF_STATE_KEY_INFRA` | Key do State VPC/EKS | Environment Variable em `homolog` e `production` | CD | Prefixo do Environment e sufixo definido externamente | `pipeline.yml` e consumidores Gateway/New Relic; obrigatória, sem default, e prefixada pelo ambiente selecionado. |
+| `AWS_TF_STATE_KEY_NEWRELIC` | Key exclusiva do State New Relic | Environment Variable em `homolog` e `production` | Plan/Apply New Relic | Prefixo do Environment e sufixo definido externamente | `newrelic.yml`; obrigatória, sem default, prefixada pelo ambiente e distinta das demais keys. |
+| `AWS_TF_STATE_KEY_GATEWAY` | Key exclusiva do State API Gateway | Environment Variable em `homolog` e `production` | CD | Prefixo do Environment e sufixo definido externamente | `api-gateway.yml`; obrigatória, sem default, e prefixada pelo ambiente selecionado. |
+| `API_GATEWAY_CORS_ORIGINS` | Lista JSON de origens HTTPS CORS | Environment Variable em cada Environment | CD | `[]` | `api-gateway.yml`; obrigatória; deve conter um array JSON válido. |
 | `AUTOFLOW_REPOSITORY` | Repositório de contrato verificado pelo CI | GitHub Repository Variable | CI, opcional | `organizacao/autoflow` | `api-gateway.yml`; default `${{ format('{0}/autoflow', github.repository_owner) }}`. |
 | `AUTOFLOW_CONTRACT_REF` | Ref de contrato | GitHub Repository Variable | CI, opcional | `develop` | `api-gateway.yml`; default `develop`. |
-| `TERRAFORM_APPLY_APPROVAL_CONFIGURED` | Guard adicional de Apply | Repository Variable; marcar `true` somente após configurar Required reviewers nos Environments usados | CD se `apply/deploy=true` | `true` | Workflows de deploy; ausente/diferente bloqueia Apply. Não substitui proteção real do Environment. |
-| `ENABLE_NEWRELIC_KUBERNETES`, `ENABLE_NEWRELIC_ACCOUNT_RESOURCES` | Ativam separadamente a integração Kubernetes e os recursos da conta | GitHub Variables opcionais de cada Environment | `newrelic.yml` Plan/Apply | `false` | O workflow usa `false` se ausentes. Para habilitar, configurar `true` após aprovação; não são inputs de dispatch. Exclusão requer dispatch Apply com `allow_destructive=true` e Required reviewers. |
+| `TERRAFORM_APPLY_APPROVAL_CONFIGURED` | Guard adicional para ações protegidas | Environment Variable; definir `true` somente depois de configurar Required reviewers efetivos no mesmo Environment | Plan/Apply e bootstrap | `true` | Ausente/diferente ou sem reviewers efetivos bloqueia o acesso AWS do job protegido. Não substitui a aprovação exigida pela proteção do Environment. |
+| `ALLOW_EKS_STATE_RECONCILIATION` | Permite reconciliação delimitada de state/acesso EKS | Environment Variable, padrão ausente/`false` | Plan/Apply VPC/EKS | `false` | `pipeline.yml`; em produção, exige dispatch e input explícito. |
+| `ENABLE_NEWRELIC_KUBERNETES`, `ENABLE_NEWRELIC_ACCOUNT_RESOURCES` | Ativam separadamente a integração Kubernetes e os recursos da conta | Environment Variables opcionais | `newrelic.yml` Plan/Apply | `false` | Ausentes usam `false`. Para habilitar, configure `true` no Environment correto; não são inputs de dispatch. Exclusão requer dispatch Apply com `allow_destructive=true` e Required reviewers. |
 | `NEW_RELIC_ACCOUNT_ID`, `NEW_RELIC_REGION`, `NEW_RELIC_API_KEY` | Account ID, região New Relic e User API key do provider/inventário remoto | Variables e Secret separados por Environment | Inventário e Plan/Apply New Relic | Não aplicável | Região e API key são obrigatórias para confirmar o inventário remoto em todo Plan; Account ID é obrigatório quando `ENABLE_NEWRELIC_ACCOUNT_RESOURCES=true`. A API key não é a License Key de ingestão. |
-| `NEW_RELIC_SYNTHETIC_URL`, `NEW_RELIC_SYNTHETIC_LOCATIONS_JSON` | Endpoint e locations do Synthetic | Variables opcionais do Environment | Plan/Apply de recursos de conta | URL vazia e `[]` | Devem ser fornecidas juntas; ausentes deixam monitor desabilitado. |
-| `NEW_RELIC_API_GATEWAY_DASHBOARD_QUERIES_JSON` | Lista JSON com títulos e NRQL de métricas AWS API Gateway já observadas | GitHub Variable de cada Environment alvo | Plan/Apply | Lista vazia | Opcional; queries validadas são consumidas pela página do dashboard. Não provisiona integração AWS↔New Relic nem altera o API Gateway. |
+| `NEW_RELIC_SYNTHETIC_URL`, `NEW_RELIC_SYNTHETIC_LOCATIONS_JSON` | Endpoint e locations do Synthetic | Environment Variables opcionais | Plan/Apply de recursos de conta | URL vazia e `[]` | Devem ser fornecidas juntas; ausentes deixam monitor desabilitado. |
+| `NEW_RELIC_API_GATEWAY_DASHBOARD_QUERIES_JSON` | Lista JSON com títulos e NRQL de métricas AWS API Gateway já observadas | Environment Variable em cada Environment alvo | Plan/Apply | Lista vazia | Opcional; queries validadas são consumidas pela página do dashboard. Não provisiona integração AWS↔New Relic nem altera o API Gateway. |
 
-`NEW_RELIC_API_KEY` é Secret; os demais inputs desta tabela são Variables não sensíveis. `newrelic_environment` é derivado do Environment GitHub já selecionado (`homolog`/`production`). `api-gateway.yml` e `newrelic.yml` descobrem o cluster e o node group por consultas EKS após validar a conta/região e exigem um único resultado; não cadastrar `EKS_CLUSTER_NAME` nem `EKS_NODEGROUP_NAME`. O pipeline da plataforma conhece o nome derivado de `eks-${project_name}` (default Terraform `eks-autoflow`). O State publica os nomes e as roles efetivas do cluster e dos nodes em outputs separados. Os demais secrets/variables AWS existentes continuam necessários conforme tabela.
+`NEW_RELIC_API_KEY` é Secret; os demais inputs desta tabela são Variables não sensíveis. `newrelic_environment` deriva do Environment GitHub (`homolog`/`production`). `pipeline.yml` define `project_name=autoflow` em homologação e `autoflow-production` em produção; os nomes de cluster e node group são `eks-<project_name>` e `nodeg-<project_name>`. API Gateway e New Relic consultam diretamente o cluster esperado do ambiente, sem selecionar o único cluster da conta. A Lambda e o API Gateway também recebem o ambiente selecionado. Não cadastrar `EKS_CLUSTER_NAME` nem `EKS_NODEGROUP_NAME`.
 
 ## Terraform inputs
 
@@ -39,7 +44,7 @@ Inventário observado nos workflows e Terraform deste repositório. Os workflows
 
 | Input | Obrigatoriedade/default | Finalidade; workflow/origem |
 |---|---|---|
-| `project_name` | Opcional; `autoflow` | Prefixo dos recursos. |
+| `project_name` | Opcional; default `autoflow`; workflow define `autoflow` ou `autoflow-production` | Deriva nomes do cluster/node group e tags de descoberta da VPC, route tables, EIP/NAT, Security Group e subnets. O valor `autoflow` preserva a identificação existente de homologação. |
 | `region_default` | Opcional; `us-east-1` | Região; workflow mapeia `AWS_REGION`. |
 | `aws_profile` | Opcional; `null` | Perfil AWS local. |
 | `aws_allowed_account_ids` | Obrigatório; sem default, lista não vazia de IDs de 12 dígitos | Guard do provider; `AWS_EXPECTED_ACCOUNT_ID` convertido em lista pelo workflow. |
@@ -51,10 +56,12 @@ Inventário observado nos workflows e Terraform deste repositório. Os workflows
 | `cluster_endpoint_public_access_cidrs` | Opcional; default `189.6.8.245/32`; validação exige CIDR se endpoint público habilitado | CIDR permanente inicial do endpoint. Terraform ignora drift nesse atributo; o workflow gerencia o `/32` temporário do runner e preserva os CIDRs preexistentes ao limpar o lease. |
 | `create_nat_gateway`, `create_operator_access_entry` | Opcionais; `true`, `true` | Controlam criação de recursos. |
 
-Para descoberta local no PowerShell, configure primeiro `AWS_PROFILE`, `AWS_REGION` e `AWS_EXPECTED_ACCOUNT_ID` e execute no root do repositório:
+Para descoberta local no PowerShell, configure primeiro `AWS_PROFILE`, `AWS_REGION` e `AWS_EXPECTED_ACCOUNT_ID` e use o nome de cluster correspondente ao ambiente:
 
 ```powershell
-$rolesJson = python scripts/verify_eks_iam_roles.py --discover --cluster eks-autoflow --region $env:AWS_REGION --expected-account $env:AWS_EXPECTED_ACCOUNT_ID
+$projectName = "autoflow" # Produção: autoflow-production
+$clusterName = "eks-$projectName"
+$rolesJson = python scripts/verify_eks_iam_roles.py --discover --cluster $clusterName --region $env:AWS_REGION --expected-account $env:AWS_EXPECTED_ACCOUNT_ID
 $roles = $rolesJson | ConvertFrom-Json
 $env:TF_VAR_cluster_role_arn = $roles.cluster_role_arn
 $env:TF_VAR_node_role_arn = $roles.node_role_arn
@@ -81,14 +88,14 @@ O comando falha se a conta STS divergir, se a trust policy ou policies obrigató
 | `expected_account_id` | Obrigatório; sem default; 12 dígitos | Conta; `AWS_EXPECTED_ACCOUNT_ID`. |
 | `environment` | `homolog` | Nome do ambiente. |
 | `terraform_state_bucket` | Obrigatório; sem default | Bucket externo; `AWS_TERRAFORM_STATE_BUCKET`. |
-| `infra_state_key` | `eks/terraform.tfstate` | State plataforma; `AWS_TF_STATE_KEY_INFRA`. |
-| `cluster_name`, `nodegroup_name` | Valores obtidos por consultas EKS no workflow | O pipeline exige exatamente um cluster e um node group, valida estado `ACTIVE` e passa os nomes descobertos ao Terraform. |
-| `lambda_function_name` | Descoberto no preflight | Workflow confirma a Lambda `autoflow-cpf-validator-homolog` via AWS e injeta o nome. |
+| `infra_state_key` | Obrigatório; sem default | State plataforma do mesmo Environment; `AWS_TF_STATE_KEY_INFRA`. |
+| `cluster_name`, `nodegroup_name` | Derivados no workflow do Environment | Homologação usa `eks-autoflow`/`nodeg-autoflow`; produção usa `eks-autoflow-production`/`nodeg-autoflow-production`. O workflow valida os recursos exatos e status `ACTIVE`. |
+| `lambda_function_name` | Derivado no workflow do Environment | `autoflow-cpf-validator-homolog` ou `autoflow-cpf-validator-production`, validada por consulta AWS. |
 | `cors_origins` | `[]` | Origens CORS; `API_GATEWAY_CORS_ORIGINS`. |
 | `alarm_actions` | `[]` | ARNs SNS opcionais; vazio não configura notificações. Workflow atual não injeta esta variável. |
 
 ## Referências indiretas
 
-`api-gateway.yml` verifica checkout do repositório `autoflow` (padrão ref `develop`), controllers/allowlist, cluster e node group `ACTIVE`, além de State remoto. Cluster/node group são consultados no EKS e a Lambda `autoflow-cpf-validator-homolog` é confirmada via AWS; não cadastrar `EKS_CLUSTER_NAME`, `EKS_NODEGROUP_NAME` nem `AWS_LAMBDA_FUNCTION_NAME`. `scripts/review_gateway_plan.py` consome `TF_VAR_expected_account_id`. Os GitHub `AWS_*` são mapeados para Terraform inputs `aws_*`; não são todos nomes idênticos. Produção não é ambiente implementado aqui.
+`api-gateway.yml` verifica checkout do repositório `autoflow` (padrão ref `develop`), controllers/allowlist, cluster e node group correspondentes ao Environment, status `ACTIVE` e state remoto do mesmo ambiente. O primeiro Plan/Apply de produção exige dispatch explícito; depois da criação do state, pushes correspondentes em `main` podem seguir CD. Não cadastrar `EKS_CLUSTER_NAME`, `EKS_NODEGROUP_NAME` nem `AWS_LAMBDA_FUNCTION_NAME`. `scripts/review_gateway_plan.py` consome `TF_VAR_expected_account_id`. Os GitHub `AWS_*` são mapeados para Terraform inputs `aws_*`; não são todos nomes idênticos.
 
 **Fontes:** `.github/workflows/pipeline.yml`, `.github/workflows/api-gateway.yml`, `infra/vars.tf`, `infra/api-gateway/variables.tf`, scripts de validação e `README.md`.

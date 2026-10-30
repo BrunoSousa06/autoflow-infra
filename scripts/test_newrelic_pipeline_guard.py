@@ -358,7 +358,7 @@ class NewRelicPipelineGuardTests(unittest.TestCase):
                 self.assertIn(expected_bucket, section)
                 self.assertIn("AWS_TF_STATE_KEY_INFRA: ${{ vars.AWS_TF_STATE_KEY_INFRA }}", job_env)
                 self.assertIn(
-                    f"EKS_LEASE_KEY: ci/eks-endpoint-lease-newrelic-${{{{ github.run_id }}}}-${{{{ github.run_attempt }}}}-{job}.json",
+                    f"EKS_LEASE_KEY: ci/${{{{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}}}/eks-endpoint-lease-newrelic-${{{{ github.run_id }}}}-${{{{ github.run_attempt }}}}-{job}.json",
                     section,
                 )
                 credentials_position = section.index("aws-actions/configure-aws-credentials@v4")
@@ -383,7 +383,30 @@ class NewRelicPipelineGuardTests(unittest.TestCase):
 
         self.assertIn("AWS_TF_STATE_KEY_INFRA: ${{ vars.AWS_TF_STATE_KEY_INFRA }}", job_env)
         self.assertIn('test -n "$AWS_TF_STATE_KEY_INFRA"', validation)
+        self.assertIn('[[ "$AWS_EXPECTED_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]', validation)
+        self.assertIn('[[ "$TF_STATE_KEY" == "$GITHUB_DEPLOYMENT_ENVIRONMENT/"* ]]', validation)
+        self.assertIn('test "$APPROVAL_CONFIGURED" = true', validation)
+        self.assertIn('test "$REVIEWERS" -gt 0', validation)
         self.assertLess(plan.index("Validar configuração antes de acessar AWS"), credentials_position)
+
+    def test_production_push_waits_for_explicit_state_bootstrap_then_runs_continuous_apply(self):
+        from pathlib import Path
+
+        workflow = Path(__file__).parents[1] / ".github/workflows/newrelic.yml"
+        content = workflow.read_text(encoding="utf-8")
+        plan = content.split("\n  plan:", 1)[1].split("\n  apply:", 1)[0]
+        apply = content.split("\n  apply:", 1)[1]
+
+        self.assertIn("outputs:", plan)
+        self.assertIn("initialized: ${{ steps.newrelic_state.outputs.initialized }}", plan)
+        self.assertIn('echo "initialized=true" >> "$GITHUB_OUTPUT"', plan)
+        self.assertIn('echo "initialized=false" >> "$GITHUB_OUTPUT"', plan)
+        self.assertIn("github.event_name == 'push' && needs.plan.outputs.initialized == 'true'", apply)
+        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.apply", apply)
+        self.assertLess(apply.index("Validar conta e aprovação efetiva"), apply.index("aws-actions/configure-aws-credentials@v4"))
+        self.assertIn('aws s3api head-bucket --bucket "$TF_STATE_BUCKET" --expected-bucket-owner "$AWS_EXPECTED_ACCOUNT_ID"', plan)
+        self.assertIn('aws eks describe-cluster --name "$EKS_CLUSTER_NAME"', plan)
+        self.assertNotIn("aws eks list-clusters", content)
 
 
 if __name__ == "__main__":

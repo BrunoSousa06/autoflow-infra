@@ -10,32 +10,49 @@ APP = Path(os.environ.get("AUTOFLOW_REPO", str(ROOT.parent / "autoflow")))
 
 
 class GatewayRoutesTest(unittest.TestCase):
-    def test_manual_dispatch_runs_plan_and_approved_apply_on_develop(self):
+    def test_plan_maps_both_branches_and_production_apply_requires_bootstrap_and_environment_approval(self):
         workflow = (ROOT / ".github/workflows/api-gateway.yml").read_text(encoding="utf-8")
-        plan, apply = workflow.split("  plan:", 1)[1].split("  apply:", 1)[0], workflow.split("  apply:", 1)[1]
-        self.assertIn("github.ref == 'refs/heads/develop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')", plan)
+        plan, apply = workflow.split("  plan:", 1)[1].split("  apply:", 1)[0], workflow.split("\n  apply:\n", 1)[1]
+        self.assertIn("(github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')", plan)
         self.assertNotIn("refs/heads/feature/", plan)
-        self.assertIn("github.ref == 'refs/heads/develop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')", apply)
-        self.assertIn("environment: homolog", apply)
+        self.assertIn("environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}", plan)
+        self.assertIn("github.ref != 'refs/heads/main' || github.ref_protected", plan)
+        self.assertIn("TF_VAR_environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}", plan)
+        self.assertIn("TF_VAR_lambda_function_name: autoflow-cpf-validator-${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}", plan)
+        self.assertIn("github.ref == 'refs/heads/develop' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.apply))", apply)
+        self.assertIn("github.ref == 'refs/heads/main' && ((github.event_name == 'push' && needs.plan.outputs.initialized == 'true') || (github.event_name == 'workflow_dispatch' && inputs.apply))", apply)
+        self.assertIn("environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}", apply)
+        self.assertIn("github.ref != 'refs/heads/main' || github.ref_protected", apply)
+        self.assertIn("test \"$APPROVAL_CONFIGURED\" = \"true\"", apply)
         self.assertIn("required_reviewers", apply)
+        self.assertLess(apply.index("Exigir aprovação efetiva configurada no environment"), apply.index("aws-actions/configure-aws-credentials@v4"))
+        self.assertIn("id: gateway_state", plan)
+        self.assertIn('echo "initialized=true" >> "$GITHUB_OUTPUT"', plan)
+        self.assertIn('echo "initialized=false" >> "$GITHUB_OUTPUT"', plan)
+        self.assertIn('[[ "$TF_VAR_expected_account_id" =~ ^[0-9]{12}$ ]]', plan)
+        self.assertIn('[[ "$AWS_TF_STATE_KEY_NEWRELIC" == "$GITHUB_DEPLOYMENT_ENVIRONMENT/"* ]]', plan)
+        self.assertIn('test "$TF_STATE_KEY" != "$TF_VAR_infra_state_key"', plan)
+        self.assertIn('test "$TF_STATE_KEY" != "$AWS_TF_STATE_KEY_NEWRELIC"', plan)
 
     def test_apply_initializes_locked_providers_before_applying_saved_plan(self):
         workflow = (ROOT / ".github/workflows/api-gateway.yml").read_text(encoding="utf-8")
-        apply = workflow.split("  apply:", 1)[1]
+        apply = workflow.split("\n  apply:\n", 1)[1]
         init_step = apply.split("- name: Inicializar state exclusivo do gateway", 1)[1].split("- name:", 1)[0]
         self.assertIn("working-directory: infra/api-gateway", init_step)
         self.assertIn("terraform init -input=false -lockfile=readonly", init_step)
         self.assertIn('backend-config="bucket=$TF_VAR_terraform_state_bucket"', init_step)
         self.assertIn('backend-config="key=$TF_STATE_KEY"', init_step)
+        self.assertIn('backend-config="expected_bucket_owner=$TF_VAR_expected_account_id"', init_step)
         self.assertLess(apply.index("terraform init -input=false -lockfile=readonly"), apply.index("terraform apply -input=false gateway.tfplan"))
 
     def test_plan_and_apply_verify_the_same_readonly_lockfile(self):
         workflow = (ROOT / ".github/workflows/api-gateway.yml").read_text(encoding="utf-8")
         plan = workflow.split("  plan:", 1)[1].split("  apply:", 1)[0]
-        apply = workflow.split("  apply:", 1)[1]
+        apply = workflow.split("\n  apply:\n", 1)[1]
 
         self.assertIn("terraform init -input=false -lockfile=readonly", plan)
-        self.assertIn("sha256sum gateway.tfplan .terraform.lock.hcl > gateway.tfplan.sha256", plan)
+        self.assertIn("sha256sum gateway.tfplan .terraform.lock.hcl gateway.tfplan.commit gateway.tfplan.metadata.json gateway-deployment-config.sha256 > gateway.tfplan.sha256", plan)
+        self.assertIn('"$GITHUB_REF" == refs/heads/develop || "$GITHUB_REF" == refs/heads/main', plan)
         self.assertIn("sha256sum --check gateway.tfplan.sha256", apply)
 
     def test_allowlist_corresponde_aos_controllers(self):
@@ -61,8 +78,12 @@ class GatewayRoutesTest(unittest.TestCase):
     def test_remote_eks_state_absence_is_diagnosed_against_cluster(self):
         workflow = (ROOT / ".github/workflows/api-gateway.yml").read_text(encoding="utf-8")
         self.assertEqual(workflow.count("state_resource_guard.py --bucket \"$TF_VAR_terraform_state_bucket\" --key \"$TF_VAR_infra_state_key\""), 2)
-        self.assertEqual(workflow.count("Pré-requisito ausente: State EKS e cluster não encontrados."), 2)
-        self.assertNotIn('head-object --bucket "$TF_VAR_terraform_state_bucket" --key "$TF_VAR_infra_state_key"', workflow)
+        self.assertEqual(workflow.count("Pré-requisito ausente: State VPC/EKS e cluster não encontrados."), 2)
+        self.assertIn("terraform_deployment_fingerprint.py api-gateway create", workflow)
+        self.assertEqual(workflow.count('head-object --bucket "$TF_VAR_terraform_state_bucket" --key "$TF_VAR_infra_state_key" --expected-bucket-owner "$TF_VAR_expected_account_id"'), 2)
+        self.assertNotIn("aws eks list-clusters", workflow)
+        self.assertNotIn("aws eks list-nodegroups", workflow)
+        self.assertIn('[[ "$TF_STATE_KEY" == "$GITHUB_DEPLOYMENT_ENVIRONMENT/"* ]]', workflow)
 
 
 if __name__ == "__main__":

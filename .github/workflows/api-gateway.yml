@@ -6,9 +6,14 @@ on:
     paths: ["infra/api-gateway/**", "scripts/*gateway*", ".github/workflows/api-gateway.yml"]
   push:
     branches: [develop, main, 'feature/**']
-    paths: ["infra/api-gateway/**", "scripts/*gateway*", ".github/workflows/api-gateway.yml"]
+    paths: ["infra/api-gateway/**", "scripts/*gateway*"]
   workflow_dispatch:
     inputs:
+      apply:
+        description: Aplicar o plano após aprovação do Environment selecionado
+        required: false
+        type: boolean
+        default: false
       allow_destructive:
         description: Autorizar exclusões e substituições neste plan
         required: false
@@ -25,7 +30,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: autoflow-api-gateway-homolog
+  group: autoflow-api-gateway-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -58,20 +63,30 @@ jobs:
       - run: terraform -chdir=infra/api-gateway/modules/private-eks test
 
   plan:
-    name: Terraform Plan homolog
-    if: github.ref == 'refs/heads/develop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    name: Terraform Plan por ambiente
+    if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref != 'refs/heads/main' || github.ref_protected)
     needs: validate
     runs-on: ubuntu-latest
-    environment: homolog
+    outputs:
+      initialized: ${{ steps.gateway_state.outputs.initialized }}
+    environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
     env:
+      GITHUB_DEPLOYMENT_ENVIRONMENT: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
       AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
       TF_VAR_aws_region: ${{ vars.AWS_REGION }}
       TF_VAR_expected_account_id: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
+      TF_VAR_environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
+      TF_VAR_lambda_function_name: autoflow-cpf-validator-${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
       TF_VAR_terraform_state_bucket: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       TF_VAR_infra_state_key: ${{ vars.AWS_TF_STATE_KEY_INFRA }}
       TF_VAR_enable_detailed_gateway_metrics: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_detailed_gateway_metrics && 'true' || 'false' }}
       TF_VAR_cors_origins: ${{ vars.API_GATEWAY_CORS_ORIGINS }}
       TF_STATE_KEY: ${{ vars.AWS_TF_STATE_KEY_GATEWAY }}
+      AWS_TF_STATE_KEY_NEWRELIC: ${{ vars.AWS_TF_STATE_KEY_NEWRELIC }}
+      EKS_PROJECT_NAME: ${{ github.ref == 'refs/heads/main' && 'autoflow-production' || 'autoflow' }}
+      EKS_CLUSTER_NAME: eks-${{ github.ref == 'refs/heads/main' && 'autoflow-production' || 'autoflow' }}
+      EKS_NODEGROUP_NAME: nodeg-${{ github.ref == 'refs/heads/main' && 'autoflow-production' || 'autoflow' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -82,19 +97,40 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
           API_GATEWAY_CORS_ORIGINS: ${{ vars.API_GATEWAY_CORS_ORIGINS }}
+          GH_TOKEN: ${{ github.token }}
+          APPROVAL_CONFIGURED: ${{ vars.TERRAFORM_APPLY_APPROVAL_CONFIGURED }}
         shell: bash
         run: |
           set -euo pipefail
+          VARIABLE_NAMES=$(gh api --paginate "repos/$GITHUB_REPOSITORY/environments/$GITHUB_DEPLOYMENT_ENVIRONMENT/variables?per_page=30" --jq '.variables[].name')
+          for name in AWS_REGION AWS_EXPECTED_ACCOUNT_ID AWS_TERRAFORM_STATE_BUCKET AWS_TF_STATE_KEY_GATEWAY AWS_TF_STATE_KEY_INFRA AWS_TF_STATE_KEY_NEWRELIC API_GATEWAY_CORS_ORIGINS TERRAFORM_APPLY_APPROVAL_CONFIGURED; do
+            grep -Fxq -- "$name" <<< "$VARIABLE_NAMES" || { echo "A Variable $name precisa estar cadastrada no GitHub Environment selecionado." >&2; exit 1; }
+          done
+          SECRET_NAMES=$(gh api --paginate "repos/$GITHUB_REPOSITORY/environments/$GITHUB_DEPLOYMENT_ENVIRONMENT/secrets?per_page=100" --jq '.secrets[].name')
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; do
+            grep -Fxq -- "$name" <<< "$SECRET_NAMES" || { echo "O Secret $name precisa estar cadastrado no GitHub Environment selecionado." >&2; exit 1; }
+          done
           test -n "$AWS_ACCESS_KEY_ID"
           test -n "$AWS_SECRET_ACCESS_KEY"
           test -n "$AWS_SESSION_TOKEN"
           [[ "$AWS_REGION" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$ ]]
-          test -n "$TF_VAR_expected_account_id"
+          [[ "$TF_VAR_expected_account_id" =~ ^[0-9]{12}$ ]]
           test -n "$TF_STATE_KEY"
+          [[ "$TF_STATE_KEY" == "$GITHUB_DEPLOYMENT_ENVIRONMENT/"* ]]
           test -n "$TF_VAR_terraform_state_bucket"
           test -n "$TF_VAR_infra_state_key"
+          [[ "$TF_VAR_infra_state_key" == "$GITHUB_DEPLOYMENT_ENVIRONMENT/"* ]]
+          test -n "$AWS_TF_STATE_KEY_NEWRELIC"
+          [[ "$AWS_TF_STATE_KEY_NEWRELIC" == "$GITHUB_DEPLOYMENT_ENVIRONMENT/"* ]]
+          test "$TF_STATE_KEY" != "$TF_VAR_infra_state_key"
+          test "$TF_STATE_KEY" != "$AWS_TF_STATE_KEY_NEWRELIC"
           test -n "$API_GATEWAY_CORS_ORIGINS"
           python -c 'import json,os,sys; value=json.loads(os.environ["API_GATEWAY_CORS_ORIGINS"]); sys.exit(not isinstance(value,list))'
+          test "$APPROVAL_CONFIGURED" = true
+          REVIEWERS=$(gh api "repos/$GITHUB_REPOSITORY/environments/$GITHUB_DEPLOYMENT_ENVIRONMENT" --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length')
+          test "$REVIEWERS" -gt 0
+      - name: Registrar fingerprint do Environment, backend e recursos do Gateway
+        run: python scripts/terraform_deployment_fingerprint.py api-gateway create infra/api-gateway/gateway-deployment-config.sha256
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -105,74 +141,92 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(aws sts get-caller-identity --query Account --output text)" = "$TF_VAR_expected_account_id"
+          python scripts/verify_aws_account.py
           test "$(aws ec2 describe-availability-zones --region "$AWS_REGION" --query 'AvailabilityZones[0].RegionName' --output text)" = "$AWS_REGION"
-          aws s3api head-bucket --bucket "$TF_VAR_terraform_state_bucket"
-          mapfile -t LAMBDA_FUNCTIONS < <(aws lambda list-functions --region "$AWS_REGION" --query "Functions[?FunctionName=='autoflow-cpf-validator-homolog'].FunctionName" --output text | tr '\t' '\n' | sed '/^$/d;/^None$/d')
-          test "${#LAMBDA_FUNCTIONS[@]}" -eq 1 || { echo "A função Lambda autoflow-cpf-validator-homolog não foi encontrada de forma única." >&2; exit 1; }
-          printf 'TF_VAR_lambda_function_name=%s\n' "${LAMBDA_FUNCTIONS[0]}" >> "$GITHUB_ENV"
-          mapfile -t CLUSTERS < <(aws eks list-clusters --region "$AWS_REGION" --query 'clusters[]' --output text | tr '\t' '\n' | sed '/^$/d')
-          test "${#CLUSTERS[@]}" -eq 1 || { echo "Esperado exatamente um cluster EKS na conta/região; encontrados ${#CLUSTERS[@]}." >&2; exit 1; }
-          TF_VAR_cluster_name="${CLUSTERS[0]}"
-          mapfile -t NODEGROUPS < <(aws eks list-nodegroups --cluster-name "$TF_VAR_cluster_name" --region "$AWS_REGION" --query 'nodegroups[]' --output text | tr '\t' '\n' | sed '/^$/d')
-          test "${#NODEGROUPS[@]}" -eq 1 || { echo "Esperado exatamente um node group no cluster; encontrados ${#NODEGROUPS[@]}." >&2; exit 1; }
-          TF_VAR_nodegroup_name="${NODEGROUPS[0]}"
+          aws s3api head-bucket --bucket "$TF_VAR_terraform_state_bucket" --expected-bucket-owner "$TF_VAR_expected_account_id"
+          aws s3api head-object --bucket "$TF_VAR_terraform_state_bucket" --key "$TF_VAR_infra_state_key" --expected-bucket-owner "$TF_VAR_expected_account_id" >/dev/null
+          aws lambda get-function --function-name "$TF_VAR_lambda_function_name" --region "$AWS_REGION" >/dev/null
+          TF_VAR_cluster_name="$EKS_CLUSTER_NAME"
+          TF_VAR_nodegroup_name="$EKS_NODEGROUP_NAME"
+          aws eks describe-cluster --name "$TF_VAR_cluster_name" --region "$AWS_REGION" >/dev/null
+          aws eks describe-nodegroup --cluster-name "$TF_VAR_cluster_name" --nodegroup-name "$TF_VAR_nodegroup_name" --region "$AWS_REGION" >/dev/null
           printf 'TF_VAR_cluster_name=%s\nTF_VAR_nodegroup_name=%s\n' "$TF_VAR_cluster_name" "$TF_VAR_nodegroup_name" >> "$GITHUB_ENV"
           INFRA_STATE_STATUS=$(python scripts/state_resource_guard.py --bucket "$TF_VAR_terraform_state_bucket" --key "$TF_VAR_infra_state_key" -- aws eks describe-cluster --name "$TF_VAR_cluster_name" --region "$AWS_REGION" --query cluster.name --output text)
           if [ "$INFRA_STATE_STATUS" != state-present ]; then
-            echo "Pré-requisito ausente: State EKS e cluster não encontrados. Execute e aplique primeiro o pipeline autoflow-infra; o API Gateway depende de eks/terraform.tfstate." >&2
+            echo "Pré-requisito ausente: State VPC/EKS e cluster não encontrados. Execute e aplique primeiro o pipeline autoflow-infra; use a key de VPC/EKS configurada no mesmo Environment." >&2
             exit 1
           fi
           test "$(aws eks describe-cluster --name "$TF_VAR_cluster_name" --region "$AWS_REGION" --query cluster.status --output text)" = ACTIVE
-          test "$(aws eks describe-nodegroup --cluster-name "$TF_VAR_cluster_name" --nodegroup-name "$TF_VAR_nodegroup_name" --region "$AWS_REGION" --query nodegroup.status --output text)" = ACTIVE
+          test "$(aws eks describe-nodegroup --cluster-name "$TF_VAR_cluster_name" --nodegroup-name "$TF_VAR_nodegroup_name" --query nodegroup.status --output text)" = ACTIVE
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.16.5"
           terraform_wrapper: false
       - name: Inicializar state exclusivo do gateway
+        id: gateway_state
         env:
           AWS_TERRAFORM_STATE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
           AWS_TF_STATE_KEY_GATEWAY: ${{ vars.AWS_TF_STATE_KEY_GATEWAY }}
         run: |
-          python scripts/state_resource_guard.py --bucket "$AWS_TERRAFORM_STATE_BUCKET" --key "$AWS_TF_STATE_KEY_GATEWAY" -- aws apigatewayv2 get-apis --query "Items[?Name=='autoflow-homolog'].ApiId | [0]" --output text
-          python scripts/state_resource_guard.py --bucket "$AWS_TERRAFORM_STATE_BUCKET" --key "$AWS_TF_STATE_KEY_GATEWAY" -- aws elbv2 describe-load-balancers --names autoflow-homolog-private --query 'LoadBalancers[0].LoadBalancerArn' --output text
+          set -euo pipefail
+          STATE_STATUS=$(python scripts/state_resource_guard.py --bucket "$AWS_TERRAFORM_STATE_BUCKET" --key "$AWS_TF_STATE_KEY_GATEWAY" -- aws apigatewayv2 get-apis --query "Items[?Name=='autoflow-${TF_VAR_environment}'].ApiId | [0]" --output text)
+          if [ "$STATE_STATUS" = state-present ]; then echo "initialized=true" >> "$GITHUB_OUTPUT"; else echo "initialized=false" >> "$GITHUB_OUTPUT"; fi
+          python scripts/state_resource_guard.py --bucket "$AWS_TERRAFORM_STATE_BUCKET" --key "$AWS_TF_STATE_KEY_GATEWAY" -- aws elbv2 describe-load-balancers --names "autoflow-${TF_VAR_environment}-private" --query 'LoadBalancers[0].LoadBalancerArn' --output text
           cd infra/api-gateway
-          terraform init -input=false -lockfile=readonly -backend-config="bucket=$TF_VAR_terraform_state_bucket" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+          terraform init -input=false -lockfile=readonly -backend-config="bucket=$TF_VAR_terraform_state_bucket" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="expected_bucket_owner=$TF_VAR_expected_account_id" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
           cd ../..
-          python scripts/prepare_gateway_imports.py --bucket "$TF_VAR_terraform_state_bucket" --key "$TF_STATE_KEY" --region "$AWS_REGION" --name autoflow-homolog --output infra/api-gateway/gateway-vpc-link-imports.auto.tf
+          python scripts/prepare_gateway_imports.py --bucket "$TF_VAR_terraform_state_bucket" --key "$TF_STATE_KEY" --region "$AWS_REGION" --name "autoflow-${TF_VAR_environment}" --output infra/api-gateway/gateway-vpc-link-imports.auto.tf
       - name: Gerar e revisar plano
         working-directory: infra/api-gateway
         env:
-          ALLOW_DESTRUCTIVE: ${{ github.ref == 'refs/heads/develop' && (github.event_name == 'push' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false')) || 'false' }}
+          ALLOW_DESTRUCTIVE: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false' }}
         run: |
           terraform plan -input=false -out=gateway.tfplan
           ALLOW_DESTRUCTIVE="$ALLOW_DESTRUCTIVE" python ../../scripts/review_gateway_plan.py gateway.tfplan
-          if [[ "$GITHUB_REF" == refs/heads/develop ]]; then sha256sum gateway.tfplan .terraform.lock.hcl > gateway.tfplan.sha256; else rm -f gateway.tfplan; fi
+          if [[ "$GITHUB_REF" == refs/heads/develop || "$GITHUB_REF" == refs/heads/main ]]; then
+            printf '%s\n' "$GITHUB_SHA" > gateway.tfplan.commit
+            python -c 'import json,os; json.dump({"run_id":os.environ["GITHUB_RUN_ID"],"run_attempt":os.environ["GITHUB_RUN_ATTEMPT"],"commit":os.environ["GITHUB_SHA"]}, open("gateway.tfplan.metadata.json", "w", encoding="utf-8"), sort_keys=True)'
+            sha256sum gateway.tfplan .terraform.lock.hcl gateway.tfplan.commit gateway.tfplan.metadata.json gateway-deployment-config.sha256 > gateway.tfplan.sha256
+          else
+            rm -f gateway.tfplan
+          fi
       - name: Publicar plano confidencial e imutável
-        if: github.ref == 'refs/heads/develop'
+        if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
-          name: gateway-tfplan-${{ github.run_id }}-${{ github.run_attempt }}
+          name: gateway-tfplan-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
           path: |
             infra/api-gateway/gateway.tfplan
             infra/api-gateway/gateway.tfplan.sha256
+            infra/api-gateway/gateway.tfplan.commit
+            infra/api-gateway/gateway.tfplan.metadata.json
+            infra/api-gateway/gateway-deployment-config.sha256
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
 
   apply:
-    name: Terraform Apply homolog (aprovação requerida)
-    if: github.ref == 'refs/heads/develop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    name: Terraform Apply por ambiente (aprovação requerida)
+    if: ((github.ref == 'refs/heads/develop' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.apply))) || (github.ref == 'refs/heads/main' && ((github.event_name == 'push' && needs.plan.outputs.initialized == 'true') || (github.event_name == 'workflow_dispatch' && inputs.apply)))) && (github.ref != 'refs/heads/main' || github.ref_protected)
     needs: plan
     runs-on: ubuntu-latest
-    environment: homolog
+    environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
     env:
+      GITHUB_DEPLOYMENT_ENVIRONMENT: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
       AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
+      TF_VAR_environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
+      TF_VAR_lambda_function_name: autoflow-cpf-validator-${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
       TF_VAR_expected_account_id: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
       TF_VAR_terraform_state_bucket: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       TF_VAR_infra_state_key: ${{ vars.AWS_TF_STATE_KEY_INFRA }}
+      TF_VAR_cors_origins: ${{ vars.API_GATEWAY_CORS_ORIGINS }}
+      AWS_TF_STATE_KEY_NEWRELIC: ${{ vars.AWS_TF_STATE_KEY_NEWRELIC }}
       TF_VAR_enable_detailed_gateway_metrics: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_detailed_gateway_metrics && 'true' || 'false' }}
       TF_STATE_KEY: ${{ vars.AWS_TF_STATE_KEY_GATEWAY }}
+      EKS_PROJECT_NAME: ${{ github.ref == 'refs/heads/main' && 'autoflow-production' || 'autoflow' }}
+      EKS_CLUSTER_NAME: eks-${{ github.ref == 'refs/heads/main' && 'autoflow-production' || 'autoflow' }}
+      EKS_NODEGROUP_NAME: nodeg-${{ github.ref == 'refs/heads/main' && 'autoflow-production' || 'autoflow' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -181,17 +235,41 @@ jobs:
         env:
           APPROVAL_CONFIGURED: ${{ vars.TERRAFORM_APPLY_APPROVAL_CONFIGURED }}
           GH_TOKEN: ${{ github.token }}
+          AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_TERRAFORM_STATE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
+          AWS_TF_STATE_KEY_GATEWAY: ${{ vars.AWS_TF_STATE_KEY_GATEWAY }}
+          AWS_TF_STATE_KEY_INFRA: ${{ vars.AWS_TF_STATE_KEY_INFRA }}
+          AWS_TF_STATE_KEY_NEWRELIC: ${{ vars.AWS_TF_STATE_KEY_NEWRELIC }}
+          API_GATEWAY_CORS_ORIGINS: ${{ vars.API_GATEWAY_CORS_ORIGINS }}
         run: |
           set -euo pipefail
+          VARIABLE_NAMES=$(gh api --paginate "repos/$GITHUB_REPOSITORY/environments/$GITHUB_DEPLOYMENT_ENVIRONMENT/variables?per_page=30" --jq '.variables[].name')
+          for name in AWS_REGION AWS_EXPECTED_ACCOUNT_ID AWS_TERRAFORM_STATE_BUCKET AWS_TF_STATE_KEY_GATEWAY AWS_TF_STATE_KEY_INFRA AWS_TF_STATE_KEY_NEWRELIC API_GATEWAY_CORS_ORIGINS TERRAFORM_APPLY_APPROVAL_CONFIGURED; do
+            grep -Fxq -- "$name" <<< "$VARIABLE_NAMES" || { echo "A Variable $name precisa estar cadastrada no GitHub Environment selecionado." >&2; exit 1; }
+          done
+          SECRET_NAMES=$(gh api --paginate "repos/$GITHUB_REPOSITORY/environments/$GITHUB_DEPLOYMENT_ENVIRONMENT/secrets?per_page=100" --jq '.secrets[].name')
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; do
+            grep -Fxq -- "$name" <<< "$SECRET_NAMES" || { echo "O Secret $name precisa estar cadastrado no GitHub Environment selecionado." >&2; exit 1; }
+          done
           test "$APPROVAL_CONFIGURED" = "true" || {
-            echo "Configure Required reviewers no environment homolog e defina TERRAFORM_APPLY_APPROVAL_CONFIGURED=true." >&2
+            echo "Configure Required reviewers no environment $GITHUB_DEPLOYMENT_ENVIRONMENT e defina TERRAFORM_APPLY_APPROVAL_CONFIGURED=true." >&2
             exit 1
           }
-          REVIEWERS=$(gh api "repos/$GITHUB_REPOSITORY/environments/homolog" --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length')
+          REVIEWERS=$(gh api "repos/$GITHUB_REPOSITORY/environments/$GITHUB_DEPLOYMENT_ENVIRONMENT" --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length')
           test "$REVIEWERS" -gt 0 || {
-            echo "O environment homolog não possui Required reviewers efetivamente configurados; Apply bloqueado." >&2
+            echo "O environment $GITHUB_DEPLOYMENT_ENVIRONMENT não possui Required reviewers efetivamente configurados; Apply bloqueado." >&2
             exit 1
           }
+          [[ "$AWS_EXPECTED_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]
+          [[ "$AWS_REGION" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$ ]]
+          test -n "$AWS_TERRAFORM_STATE_BUCKET"
+          [[ "$AWS_TF_STATE_KEY_GATEWAY" == "$GITHUB_DEPLOYMENT_ENVIRONMENT/"* ]]
+          [[ "$AWS_TF_STATE_KEY_INFRA" == "$GITHUB_DEPLOYMENT_ENVIRONMENT/"* ]]
+          [[ "$AWS_TF_STATE_KEY_NEWRELIC" == "$GITHUB_DEPLOYMENT_ENVIRONMENT/"* ]]
+          test "$AWS_TF_STATE_KEY_GATEWAY" != "$AWS_TF_STATE_KEY_INFRA"
+          test "$AWS_TF_STATE_KEY_GATEWAY" != "$AWS_TF_STATE_KEY_NEWRELIC"
+          test -n "$API_GATEWAY_CORS_ORIGINS"
       - name: Exigir credenciais temporárias e configuração AWS
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -204,10 +282,29 @@ jobs:
           test -n "$AWS_SECRET_ACCESS_KEY"
           test -n "$AWS_SESSION_TOKEN"
           [[ "$AWS_REGION" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$ ]]
-          test -n "$TF_VAR_expected_account_id"
+          [[ "$TF_VAR_expected_account_id" =~ ^[0-9]{12}$ ]]
           test -n "$TF_STATE_KEY"
+          [[ "$TF_STATE_KEY" == "$GITHUB_DEPLOYMENT_ENVIRONMENT/"* ]]
           test -n "$TF_VAR_terraform_state_bucket"
           test -n "$TF_VAR_infra_state_key"
+          [[ "$TF_VAR_infra_state_key" == "$GITHUB_DEPLOYMENT_ENVIRONMENT/"* ]]
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.5"
+          terraform_wrapper: false
+      - name: Baixar plan vinculado a este run, attempt e commit
+        uses: actions/download-artifact@v4
+        with:
+          name: gateway-tfplan-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: infra/api-gateway
+      - name: Validar fingerprint, run, commit e integridade antes de qualquer acesso AWS
+        working-directory: infra/api-gateway
+        run: |
+          set -euo pipefail
+          test "$(cat gateway.tfplan.commit)" = "$GITHUB_SHA"
+          python -c 'import json,os,sys; m=json.load(open("gateway.tfplan.metadata.json", encoding="utf-8")); sys.exit(not (m == {"run_id":os.environ["GITHUB_RUN_ID"],"run_attempt":os.environ["GITHUB_RUN_ATTEMPT"],"commit":os.environ["GITHUB_SHA"]}))'
+          sha256sum --check gateway.tfplan.sha256
+          python ../../scripts/terraform_deployment_fingerprint.py api-gateway verify gateway-deployment-config.sha256
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -218,41 +315,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(aws sts get-caller-identity --query Account --output text)" = "$TF_VAR_expected_account_id"
+          python scripts/verify_aws_account.py
           test "$(aws ec2 describe-availability-zones --region "$AWS_REGION" --query 'AvailabilityZones[0].RegionName' --output text)" = "$AWS_REGION"
-          aws s3api head-bucket --bucket "$TF_VAR_terraform_state_bucket"
-          mapfile -t LAMBDA_FUNCTIONS < <(aws lambda list-functions --region "$AWS_REGION" --query "Functions[?FunctionName=='autoflow-cpf-validator-homolog'].FunctionName" --output text | tr '\t' '\n' | sed '/^$/d;/^None$/d')
-          test "${#LAMBDA_FUNCTIONS[@]}" -eq 1 || { echo "A função Lambda autoflow-cpf-validator-homolog não foi encontrada de forma única." >&2; exit 1; }
-          printf 'TF_VAR_lambda_function_name=%s\n' "${LAMBDA_FUNCTIONS[0]}" >> "$GITHUB_ENV"
-          mapfile -t CLUSTERS < <(aws eks list-clusters --region "$AWS_REGION" --query 'clusters[]' --output text | tr '\t' '\n' | sed '/^$/d')
-          test "${#CLUSTERS[@]}" -eq 1 || { echo "Esperado exatamente um cluster EKS na conta/região; encontrados ${#CLUSTERS[@]}." >&2; exit 1; }
-          TF_VAR_cluster_name="${CLUSTERS[0]}"
-          mapfile -t NODEGROUPS < <(aws eks list-nodegroups --cluster-name "$TF_VAR_cluster_name" --region "$AWS_REGION" --query 'nodegroups[]' --output text | tr '\t' '\n' | sed '/^$/d')
-          test "${#NODEGROUPS[@]}" -eq 1 || { echo "Esperado exatamente um node group no cluster; encontrados ${#NODEGROUPS[@]}." >&2; exit 1; }
-          TF_VAR_nodegroup_name="${NODEGROUPS[0]}"
+          aws s3api head-bucket --bucket "$TF_VAR_terraform_state_bucket" --expected-bucket-owner "$TF_VAR_expected_account_id"
+          aws s3api head-object --bucket "$TF_VAR_terraform_state_bucket" --key "$TF_VAR_infra_state_key" --expected-bucket-owner "$TF_VAR_expected_account_id" >/dev/null
+          aws lambda get-function --function-name "$TF_VAR_lambda_function_name" --region "$AWS_REGION" >/dev/null
+          TF_VAR_cluster_name="$EKS_CLUSTER_NAME"
+          TF_VAR_nodegroup_name="$EKS_NODEGROUP_NAME"
+          aws eks describe-cluster --name "$TF_VAR_cluster_name" --region "$AWS_REGION" >/dev/null
+          aws eks describe-nodegroup --cluster-name "$TF_VAR_cluster_name" --nodegroup-name "$TF_VAR_nodegroup_name" --region "$AWS_REGION" >/dev/null
           printf 'TF_VAR_cluster_name=%s\nTF_VAR_nodegroup_name=%s\n' "$TF_VAR_cluster_name" "$TF_VAR_nodegroup_name" >> "$GITHUB_ENV"
           INFRA_STATE_STATUS=$(python scripts/state_resource_guard.py --bucket "$TF_VAR_terraform_state_bucket" --key "$TF_VAR_infra_state_key" -- aws eks describe-cluster --name "$TF_VAR_cluster_name" --region "$AWS_REGION" --query cluster.name --output text)
           if [ "$INFRA_STATE_STATUS" != state-present ]; then
-            echo "Pré-requisito ausente: State EKS e cluster não encontrados. Execute e aplique primeiro o pipeline autoflow-infra; o API Gateway depende de eks/terraform.tfstate." >&2
+            echo "Pré-requisito ausente: State VPC/EKS e cluster não encontrados. Execute e aplique primeiro o pipeline autoflow-infra; use a key de VPC/EKS configurada no mesmo Environment." >&2
             exit 1
           fi
           test "$(aws eks describe-cluster --name "$TF_VAR_cluster_name" --region "$AWS_REGION" --query cluster.status --output text)" = ACTIVE
           test "$(aws eks describe-nodegroup --cluster-name "$TF_VAR_cluster_name" --nodegroup-name "$TF_VAR_nodegroup_name" --region "$AWS_REGION" --query nodegroup.status --output text)" = ACTIVE
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.16.5"
-          terraform_wrapper: false
-      - name: Download do plano desta execução
-        uses: actions/download-artifact@v4
-        with:
-          name: gateway-tfplan-${{ github.run_id }}-${{ github.run_attempt }}
-          path: infra/api-gateway
-      - name: Verificar integridade do plano
-        working-directory: infra/api-gateway
-        run: sha256sum --check gateway.tfplan.sha256
       - name: Inicializar state exclusivo do gateway
         working-directory: infra/api-gateway
-        run: terraform init -input=false -lockfile=readonly -backend-config="bucket=$TF_VAR_terraform_state_bucket" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+        run: terraform init -input=false -lockfile=readonly -backend-config="bucket=$TF_VAR_terraform_state_bucket" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="expected_bucket_owner=$TF_VAR_expected_account_id" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
       - name: Aplicar exatamente o plano aprovado
         working-directory: infra/api-gateway
         run: terraform apply -input=false gateway.tfplan

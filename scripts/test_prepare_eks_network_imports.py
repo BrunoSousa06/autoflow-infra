@@ -16,12 +16,13 @@ SUBNETS = (
 )
 
 
-def vpc():
+def vpc(project_name="autoflow"):
+    name = "main-vpc" if project_name == "autoflow" else f"main-vpc-{project_name}"
     return {"VpcId": VPC_ID, "OwnerId": ACCOUNT, "CidrBlock": "10.0.0.0/16",
-            "Tags": [{"Key": "Name", "Value": "main-vpc"}]}
+            "Tags": [{"Key": "Name", "Value": name}]}
 
 
-def subnets():
+def subnets(project_name="autoflow"):
     result = []
     for _, cidr, zone, subnet_id, _ in SUBNETS:
         result.append({
@@ -34,13 +35,13 @@ def subnets():
             "Tags": [
                 {"Key": "Name", "Value": "private-subnet"},
                 {"Key": "kubernetes.io/role/internal-elb", "Value": "1"},
-                {"Key": "kubernetes.io/cluster/eks-autoflow", "Value": "shared"},
+                {"Key": f"kubernetes.io/cluster/eks-{project_name}", "Value": "shared"},
             ],
         })
     return result
 
 
-def route_tables(association_table_id=RT_ID):
+def route_tables(association_table_id=RT_ID, project_name="autoflow"):
     associations = []
     for _, _, _, subnet_id, association_id in SUBNETS:
         associations.append({
@@ -53,13 +54,15 @@ def route_tables(association_table_id=RT_ID):
         "RouteTableId": RT_ID,
         "VpcId": VPC_ID,
         "OwnerId": ACCOUNT,
-        "Tags": [{"Key": "Name", "Value": "autoflow-private-rt"}],
+        "Tags": [{"Key": "Name", "Value": f"{project_name}-private-rt"}],
         "Associations": associations,
     }]
 
 
 class NetworkImportTests(unittest.TestCase):
     def setUp(self):
+        self.commands = []
+        self.nodegroups = ["nodeg-autoflow"]
         self.responses = {
             "describe-vpcs": {"Vpcs": [vpc()]},
             "describe-vpc-attribute": {"EnableDnsSupport": {"Value": True},
@@ -73,14 +76,19 @@ class NetworkImportTests(unittest.TestCase):
         }
 
     def run_json(self, command, run=None):
+        self.commands.append(command)
+        if "list-nodegroups" in command:
+            return {"nodegroups": self.nodegroups}
         operation = next(part for part in command if part.startswith("describe-"))
         return self.responses[operation]
 
-    def discover(self, addresses=set(), state_ids=None):
+    def discover(self, addresses=set(), state_ids=None, project_name="autoflow", cluster_present=False):
         with patch.object(imports, "run_json", side_effect=self.run_json), patch.object(
-            imports, "cluster_exists", return_value=False
+            imports, "cluster_exists", return_value=cluster_present
         ):
-            return imports.discover_imports(ACCOUNT, "us-east-1", set(addresses), state_ids or {})
+            return imports.discover_imports(
+                ACCOUNT, "us-east-1", set(addresses), state_ids or {}, project_name=project_name
+            )
 
     def test_discovers_only_the_eight_matching_resources(self):
         found = self.discover()
@@ -143,6 +151,27 @@ class NetworkImportTests(unittest.TestCase):
     def test_missing_vpc_allows_normal_empty_rebuild(self):
         self.responses["describe-vpcs"]["Vpcs"] = []
         self.assertEqual(self.discover(), [])
+
+    def test_production_discovery_uses_environment_specific_tags_and_eks_names(self):
+        project_name = "autoflow-production"
+        self.responses["describe-vpcs"]["Vpcs"] = [vpc(project_name)]
+        self.responses["describe-subnets"]["Subnets"] = subnets(project_name)
+        self.responses["describe-route-tables"]["RouteTables"] = route_tables(project_name=project_name)
+        self.nodegroups = ["nodeg-autoflow-production"]
+        addresses = {"aws_eks_cluster.autoflow", "aws_eks_node_group.node_group"}
+        state_ids = {
+            "aws_eks_cluster.autoflow": "eks-autoflow-production",
+            "aws_eks_node_group.node_group": "eks-autoflow-production:nodeg-autoflow-production",
+        }
+
+        self.discover(addresses, state_ids, project_name, cluster_present=True)
+
+        self.assertIn("Name=tag:Name,Values=main-vpc-autoflow-production", self.commands[0])
+        self.assertTrue(any("Name=tag:Name,Values=autoflow-production-nat-eip" in command for command in self.commands))
+        self.assertEqual(
+            ["aws", "eks", "list-nodegroups", "--cluster-name", "eks-autoflow-production", "--region", "us-east-1"],
+            next(command for command in self.commands if "list-nodegroups" in command),
+        )
 
     def test_public_subnet_survivor_outside_supported_import_set_blocks_plan(self):
         public = {

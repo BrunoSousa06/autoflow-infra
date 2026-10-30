@@ -1,8 +1,20 @@
 name: New Relic Pipeline
 
 on:
-  push:
+  pull_request:
     branches: [develop, main]
+    paths:
+      - infra/newrelic/**
+      - scripts/newrelic*
+      - scripts/test_newrelic*
+      - scripts/eks_endpoint_access.py
+      - scripts/test_eks_endpoint_access.py
+      - scripts/review_eks_plan.py
+      - .github/workflows/newrelic.yml
+  push:
+    branches: [develop, main, 'feature/**']
+    paths-ignore:
+      - .github/workflows/newrelic.yml
   workflow_dispatch:
     inputs:
       apply:
@@ -25,7 +37,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: autoflow-eks-endpoint-deploy
+  group: autoflow-eks-endpoint-deploy-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -43,18 +55,22 @@ jobs:
       - run: terraform -chdir=infra/newrelic validate
 
   plan:
-    if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref != 'refs/heads/main' || github.ref_protected)
     needs: validate
     runs-on: ubuntu-latest
+    outputs:
+      initialized: ${{ steps.newrelic_state.outputs.initialized }}
     environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
     env:
+      GITHUB_DEPLOYMENT_ENVIRONMENT: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
       AWS_REGION: ${{ vars.AWS_REGION }}
       AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
       AWS_TF_STATE_KEY_INFRA: ${{ vars.AWS_TF_STATE_KEY_INFRA }}
       TF_STATE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       TF_STATE_KEY: ${{ vars.AWS_TF_STATE_KEY_NEWRELIC }}
       EKS_LEASE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
-      EKS_LEASE_KEY: ci/eks-endpoint-lease-newrelic-${{ github.run_id }}-${{ github.run_attempt }}-plan.json
+      EKS_LEASE_KEY: ci/${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}/eks-endpoint-lease-newrelic-${{ github.run_id }}-${{ github.run_attempt }}-plan.json
+      EKS_CLUSTER_NAME: eks-${{ github.ref == 'refs/heads/main' && 'autoflow-production' || 'autoflow' }}
       TF_VAR_aws_region: ${{ vars.AWS_REGION }}
       TF_VAR_aws_allowed_account_ids: '["${{ vars.AWS_EXPECTED_ACCOUNT_ID }}"]'
       TF_VAR_enable_newrelic_kubernetes: ${{ vars.ENABLE_NEWRELIC_KUBERNETES || 'false' }}
@@ -74,18 +90,44 @@ jobs:
         with:
           ref: ${{ github.sha }}
       - name: Validar configuração antes de acessar AWS
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          APPROVAL_CONFIGURED: ${{ vars.TERRAFORM_APPLY_APPROVAL_CONFIGURED }}
+          DEPLOY_ENVIRONMENT: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
         run: |
           set -euo pipefail
           umask 077
+          VARIABLE_NAMES=$(gh api --paginate "repos/$GITHUB_REPOSITORY/environments/$DEPLOY_ENVIRONMENT/variables?per_page=30" --jq '.variables[].name')
+          for name in AWS_REGION AWS_EXPECTED_ACCOUNT_ID AWS_TERRAFORM_STATE_BUCKET AWS_TF_STATE_KEY_INFRA AWS_TF_STATE_KEY_NEWRELIC TERRAFORM_APPLY_APPROVAL_CONFIGURED; do
+            grep -Fxq -- "$name" <<< "$VARIABLE_NAMES" || { echo "A Variable $name precisa estar cadastrada no GitHub Environment selecionado." >&2; exit 1; }
+          done
+          SECRET_NAMES=$(gh api --paginate "repos/$GITHUB_REPOSITORY/environments/$DEPLOY_ENVIRONMENT/secrets?per_page=100" --jq '.secrets[].name')
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE NEW_RELIC_API_KEY; do
+            grep -Fxq -- "$name" <<< "$SECRET_NAMES" || { echo "O Secret $name precisa estar cadastrado no GitHub Environment selecionado." >&2; exit 1; }
+          done
           python scripts/newrelic_pipeline_guard.py validate
+          [[ "$AWS_EXPECTED_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]
           test -n "$AWS_REGION"
           [[ "$AWS_REGION" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$ ]]
           test -n "$TF_STATE_BUCKET"
           test -n "$TF_STATE_KEY"
           test -n "$AWS_TF_STATE_KEY_INFRA"
+          [[ "$TF_STATE_KEY" == "$GITHUB_DEPLOYMENT_ENVIRONMENT/"* ]]
+          [[ "$AWS_TF_STATE_KEY_INFRA" == "$GITHUB_DEPLOYMENT_ENVIRONMENT/"* ]]
           test "$TF_STATE_KEY" != "$AWS_TF_STATE_KEY_INFRA"
           [[ "$TF_VAR_newrelic_region" == US || "$TF_VAR_newrelic_region" == EU ]]
           test -n "$TF_VAR_newrelic_api_key"
+          test -n "$TF_STATE_BUCKET"
+          test -n "$AWS_ACCESS_KEY_ID"
+          test -n "$AWS_SECRET_ACCESS_KEY"
+          test -n "$AWS_SESSION_TOKEN"
+          test -n "$PLAN_ENCRYPTION_PASSPHRASE"
+          test "$APPROVAL_CONFIGURED" = true
+          REVIEWERS=$(gh api "repos/$GITHUB_REPOSITORY/environments/$DEPLOY_ENVIRONMENT" --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length')
+          test "$REVIEWERS" -gt 0
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -97,24 +139,14 @@ jobs:
           set -euo pipefail
           python scripts/verify_aws_account.py
           test "$(aws ec2 describe-availability-zones --region "$AWS_REGION" --query 'AvailabilityZones[0].RegionName' --output text)" = "$AWS_REGION"
+          aws s3api head-bucket --bucket "$TF_STATE_BUCKET" --expected-bucket-owner "$AWS_EXPECTED_ACCOUNT_ID" --region "$AWS_REGION"
           test -n "$PLAN_ENCRYPTION_PASSPHRASE"
       - name: Descobrir cluster EKS e preencher input Terraform
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t CLUSTERS < <(aws eks list-clusters --region "$AWS_REGION" --query 'clusters[]' --output text | tr '\t' '\n' | sed '/^$/d')
-          test "${#CLUSTERS[@]}" -eq 1 || { echo "Esperado exatamente um cluster EKS na conta/região; encontrados ${#CLUSTERS[@]}." >&2; exit 1; }
-          printf 'EKS_CLUSTER_NAME=%s\nTF_VAR_eks_cluster_name=%s\n' "${CLUSTERS[0]}" "${CLUSTERS[0]}" >> "$GITHUB_ENV"
-      - name: Confirmar reviewers obrigatórios no Environment
-        env:
-          GH_TOKEN: ${{ github.token }}
-          APPROVAL_CONFIGURED: ${{ vars.TERRAFORM_APPLY_APPROVAL_CONFIGURED }}
-          DEPLOY_ENVIRONMENT: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
-        run: |
-          set -euo pipefail
-          test "$APPROVAL_CONFIGURED" = true
-          REVIEWERS=$(gh api "repos/$GITHUB_REPOSITORY/environments/$DEPLOY_ENVIRONMENT" --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length')
-          test "$REVIEWERS" -gt 0
+          aws eks describe-cluster --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" >/dev/null
+          printf 'TF_VAR_eks_cluster_name=%s\n' "$EKS_CLUSTER_NAME" >> "$GITHUB_ENV"
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.16.5"
@@ -123,17 +155,20 @@ jobs:
         with:
           version: v3.16.4
       - name: Inicializar e inspecionar states sem exibir conteúdo
+        id: newrelic_state
         run: |
           set -euo pipefail
           umask 077
           cd infra
-          terraform init -input=false -lockfile=readonly -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$AWS_TF_STATE_KEY_INFRA" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+          terraform init -input=false -lockfile=readonly -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$AWS_TF_STATE_KEY_INFRA" -backend-config="region=$AWS_REGION" -backend-config="expected_bucket_owner=$AWS_EXPECTED_ACCOUNT_ID" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
           terraform state pull > "$RUNNER_TEMP/legacy-state.json"
           cd newrelic
-          terraform init -input=false -lockfile=readonly -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
-          if aws s3api head-object --bucket "$TF_STATE_BUCKET" --key "$TF_STATE_KEY" >/dev/null 2>"$RUNNER_TEMP/newrelic-head-error"; then
+          terraform init -input=false -lockfile=readonly -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="expected_bucket_owner=$AWS_EXPECTED_ACCOUNT_ID" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+          if aws s3api head-object --bucket "$TF_STATE_BUCKET" --key "$TF_STATE_KEY" --expected-bucket-owner "$AWS_EXPECTED_ACCOUNT_ID" >/dev/null 2>"$RUNNER_TEMP/newrelic-head-error"; then
+            echo "initialized=true" >> "$GITHUB_OUTPUT"
             terraform state pull > "$RUNNER_TEMP/newrelic-state.json"
           elif grep -Eqi '404|NoSuchKey|Not Found' "$RUNNER_TEMP/newrelic-head-error"; then
+            echo "initialized=false" >> "$GITHUB_OUTPUT"
             printf '{"version":4,"resources":[]}\n' > "$RUNNER_TEMP/newrelic-state.json"
           else
             echo "Não foi possível confirmar se o state New Relic existe; bloqueado." >&2
@@ -225,7 +260,7 @@ jobs:
           python ../../scripts/newrelic_pipeline_guard.py check-plan newrelic-plan.json
           python ../../scripts/review_eks_plan.py newrelic-plan.json --allow-destructive "${{ inputs.allow_destructive || 'false' }}"
           printf '%s' "$GITHUB_SHA" > newrelic.tfplan.commit
-          gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$PLAN_ENCRYPTION_PASSPHRASE" --output newrelic.tfplan.gpg newrelic.tfplan
+          printf '%s\n' "$PLAN_ENCRYPTION_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --symmetric --cipher-algo AES256 --output newrelic.tfplan.gpg newrelic.tfplan
           sha256sum newrelic.tfplan.gpg newrelic.tfplan.commit newrelic-inputs.sha256 newrelic-reconciliation.sha256 > newrelic.tfplan.sha256
           rm -f newrelic.tfplan newrelic-plan.json
       - uses: actions/upload-artifact@v4
@@ -250,18 +285,20 @@ jobs:
           rm -f "$RUNNER_TEMP/legacy-state.json" "$RUNNER_TEMP/newrelic-state.json" "$RUNNER_TEMP/newrelic-account-presence" "$RUNNER_TEMP/newrelic-account-inventory.json" "$RUNNER_TEMP/newrelic-reconciliation-summary.json" "$RUNNER_TEMP/helm-presence" "$RUNNER_TEMP/helm-inventory.json" "$RUNNER_TEMP/newrelic-head-error" infra/newrelic/newrelic-reconciliation.auto.tf infra/newrelic/newrelic-reconciliation.sha256
 
   apply:
-    if: (github.ref == 'refs/heads/develop' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.apply))) || (github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.apply)
+    if: ((github.ref == 'refs/heads/develop' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.apply))) || (github.ref == 'refs/heads/main' && ((github.event_name == 'push' && needs.plan.outputs.initialized == 'true') || (github.event_name == 'workflow_dispatch' && inputs.apply)))) && (github.ref != 'refs/heads/main' || github.ref_protected)
     needs: plan
     runs-on: ubuntu-latest
     environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
     env:
+      GITHUB_DEPLOYMENT_ENVIRONMENT: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
       AWS_REGION: ${{ vars.AWS_REGION }}
       AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
       AWS_TF_STATE_KEY_INFRA: ${{ vars.AWS_TF_STATE_KEY_INFRA }}
       TF_STATE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       TF_STATE_KEY: ${{ vars.AWS_TF_STATE_KEY_NEWRELIC }}
       EKS_LEASE_BUCKET: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
-      EKS_LEASE_KEY: ci/eks-endpoint-lease-newrelic-${{ github.run_id }}-${{ github.run_attempt }}-apply.json
+      EKS_LEASE_KEY: ci/${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}/eks-endpoint-lease-newrelic-${{ github.run_id }}-${{ github.run_attempt }}-apply.json
+      EKS_CLUSTER_NAME: eks-${{ github.ref == 'refs/heads/main' && 'autoflow-production' || 'autoflow' }}
       TF_VAR_aws_region: ${{ vars.AWS_REGION }}
       TF_VAR_aws_allowed_account_ids: '["${{ vars.AWS_EXPECTED_ACCOUNT_ID }}"]'
       PLAN_ENCRYPTION_PASSPHRASE: ${{ secrets.TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE }}
@@ -279,33 +316,54 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
+      - name: Validar conta e aprovação efetiva
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVAL_CONFIGURED: ${{ vars.TERRAFORM_APPLY_APPROVAL_CONFIGURED }}
+          DEPLOY_ENVIRONMENT: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          VARIABLE_NAMES=$(gh api --paginate "repos/$GITHUB_REPOSITORY/environments/$DEPLOY_ENVIRONMENT/variables?per_page=30" --jq '.variables[].name')
+          for name in AWS_REGION AWS_EXPECTED_ACCOUNT_ID AWS_TERRAFORM_STATE_BUCKET AWS_TF_STATE_KEY_INFRA AWS_TF_STATE_KEY_NEWRELIC TERRAFORM_APPLY_APPROVAL_CONFIGURED; do
+            grep -Fxq -- "$name" <<< "$VARIABLE_NAMES" || { echo "A Variable $name precisa estar cadastrada no GitHub Environment selecionado." >&2; exit 1; }
+          done
+          SECRET_NAMES=$(gh api --paginate "repos/$GITHUB_REPOSITORY/environments/$DEPLOY_ENVIRONMENT/secrets?per_page=100" --jq '.secrets[].name')
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE NEW_RELIC_API_KEY; do
+            grep -Fxq -- "$name" <<< "$SECRET_NAMES" || { echo "O Secret $name precisa estar cadastrado no GitHub Environment selecionado." >&2; exit 1; }
+          done
+          [[ "$AWS_EXPECTED_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]
+          [[ "$AWS_REGION" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$ ]]
+          [[ "$TF_STATE_KEY" == "$GITHUB_DEPLOYMENT_ENVIRONMENT/"* ]]
+          [[ "$AWS_TF_STATE_KEY_INFRA" == "$GITHUB_DEPLOYMENT_ENVIRONMENT/"* ]]
+          test "$TF_STATE_KEY" != "$AWS_TF_STATE_KEY_INFRA"
+          test -n "$TF_STATE_BUCKET"
+          test -n "$AWS_ACCESS_KEY_ID"
+          test -n "$AWS_SECRET_ACCESS_KEY"
+          test -n "$AWS_SESSION_TOKEN"
+          test -n "$PLAN_ENCRYPTION_PASSPHRASE"
+          test -n "$TF_VAR_newrelic_api_key"
+          test "$APPROVAL_CONFIGURED" = true
+          REVIEWERS=$(gh api "repos/$GITHUB_REPOSITORY/environments/$DEPLOY_ENVIRONMENT" --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length')
+          test "$REVIEWERS" -gt 0
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
-      - name: Validar conta e aprovação efetiva
-        env:
-          GH_TOKEN: ${{ github.token }}
-          APPROVAL_CONFIGURED: ${{ vars.TERRAFORM_APPLY_APPROVAL_CONFIGURED }}
-          DEPLOY_ENVIRONMENT: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
-        run: |
-          set -euo pipefail
-          umask 077
-          python scripts/verify_aws_account.py
-          test "$(aws ec2 describe-availability-zones --region "$AWS_REGION" --query 'AvailabilityZones[0].RegionName' --output text)" = "$AWS_REGION"
-          test -n "$PLAN_ENCRYPTION_PASSPHRASE"
-          test "$APPROVAL_CONFIGURED" = true
-          REVIEWERS=$(gh api "repos/$GITHUB_REPOSITORY/environments/$DEPLOY_ENVIRONMENT" --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length')
-          test "$REVIEWERS" -gt 0
       - name: Descobrir cluster EKS e preencher input Terraform
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t CLUSTERS < <(aws eks list-clusters --region "$AWS_REGION" --query 'clusters[]' --output text | tr '\t' '\n' | sed '/^$/d')
-          test "${#CLUSTERS[@]}" -eq 1 || { echo "Esperado exatamente um cluster EKS na conta/região; encontrados ${#CLUSTERS[@]}." >&2; exit 1; }
-          printf 'EKS_CLUSTER_NAME=%s\nTF_VAR_eks_cluster_name=%s\n' "${CLUSTERS[0]}" "${CLUSTERS[0]}" >> "$GITHUB_ENV"
+          python scripts/verify_aws_account.py
+          test "$(aws ec2 describe-availability-zones --region "$AWS_REGION" --query 'AvailabilityZones[0].RegionName' --output text)" = "$AWS_REGION"
+          aws s3api head-bucket --bucket "$TF_STATE_BUCKET" --expected-bucket-owner "$AWS_EXPECTED_ACCOUNT_ID" --region "$AWS_REGION"
+          aws eks describe-cluster --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" >/dev/null
+          printf 'TF_VAR_eks_cluster_name=%s\n' "$EKS_CLUSTER_NAME" >> "$GITHUB_ENV"
       - name: Capturar IP do runner
         id: runner
         run: echo "ip=$(curl -4fsS https://checkip.amazonaws.com | tr -d '\n')" >> "$GITHUB_OUTPUT"
@@ -336,7 +394,7 @@ jobs:
           test "$(cat newrelic.tfplan.commit)" = "$GITHUB_SHA"
           sha256sum --check newrelic.tfplan.sha256
           python ../../scripts/newrelic_pipeline_guard.py verify-fingerprint newrelic-inputs.sha256
-          gpg --batch --yes --decrypt --passphrase "$PLAN_ENCRYPTION_PASSPHRASE" --output newrelic.tfplan newrelic.tfplan.gpg
+          printf '%s\n' "$PLAN_ENCRYPTION_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --decrypt --output newrelic.tfplan newrelic.tfplan.gpg
       - name: Revalidar cluster, Secret e estados antes do Apply
         run: |
           set -euo pipefail
@@ -367,11 +425,11 @@ jobs:
             echo "absent" > "$RUNNER_TEMP/helm-presence"
           fi
           cd infra
-          terraform init -input=false -lockfile=readonly -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$AWS_TF_STATE_KEY_INFRA" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+          terraform init -input=false -lockfile=readonly -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$AWS_TF_STATE_KEY_INFRA" -backend-config="region=$AWS_REGION" -backend-config="expected_bucket_owner=$AWS_EXPECTED_ACCOUNT_ID" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
           terraform state pull > "$RUNNER_TEMP/legacy-state.json"
           cd newrelic
-          terraform init -input=false -lockfile=readonly -reconfigure -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
-          if aws s3api head-object --bucket "$TF_STATE_BUCKET" --key "$TF_STATE_KEY" >/dev/null 2>"$RUNNER_TEMP/newrelic-head-error"; then
+          terraform init -input=false -lockfile=readonly -reconfigure -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="expected_bucket_owner=$AWS_EXPECTED_ACCOUNT_ID" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+          if aws s3api head-object --bucket "$TF_STATE_BUCKET" --key "$TF_STATE_KEY" --expected-bucket-owner "$AWS_EXPECTED_ACCOUNT_ID" >/dev/null 2>"$RUNNER_TEMP/newrelic-head-error"; then
             terraform state pull > "$RUNNER_TEMP/newrelic-state.json"
           elif grep -Eqi '404|NoSuchKey|Not Found' "$RUNNER_TEMP/newrelic-head-error"; then
             printf '{"version":4,"resources":[]}\n' > "$RUNNER_TEMP/newrelic-state.json"

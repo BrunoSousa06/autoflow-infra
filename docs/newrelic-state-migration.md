@@ -5,7 +5,7 @@ Este procedimento cobre somente a transferência de ownership Terraform entre `i
 ## Regras de segurança
 
 1. Obter autorização explícita do owner de infraestrutura e janela de mudança. Desabilitar temporariamente ambos os workflows para evitar deploy concorrente; congelar mudanças manuais nos objetos New Relic.
-2. Confirmar conta/região AWS, bucket e keys dos dois Environments. Não confundir a User API key do provider com a License Key de ingestão.
+2. Confirmar conta/região AWS, bucket e keys dos dois Environments. Se o bucket estiver ausente, interromper a migração e usar o [bootstrap isolado do bucket](state-bucket-bootstrap.md); `terraform init` não cria nem corrige backend. Não confundir a User API key do provider com a License Key de ingestão.
 3. Com backend correto inicializado em cada root, registrar `terraform state list` em diretório restrito. Inspecionar endereços reais e módulos/índices retornados; nunca deduzir `[0]` ou chaves de `for_each` pelo código atual. A saída de `terraform state show` pode conter valores sensíveis: não anexar a tickets, logs ou artifacts.
 4. Confirmar cada objeto remoto por refresh/read-only APIs/Helm, comparando account, ambiente, cluster, namespace e identidade. AccessDenied, timeout, API indisponível ou resposta ambígua significa parar, não significa ausência.
 5. Criar backup de cada state com `terraform state pull`, em local criptografado, acesso mínimo e retenção aprovada. Registrar hash, versão e horário sem publicar o conteúdo; confirmar leitura do backup antes de prosseguir.
@@ -30,11 +30,11 @@ O input de reconciliação é falso por padrão e não autoriza `state rm`, impo
 Exemplo de inspeção depois de confirmar bucket/key autorizados (os comandos leem state; a saída deve permanecer em diretório restrito):
 
 ```bash
-terraform -chdir=infra init -input=false -backend-config="bucket=$AWS_TERRAFORM_STATE_BUCKET" -backend-config="key=$AWS_TF_STATE_KEY_INFRA" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+terraform -chdir=infra init -input=false -backend-config="bucket=$AWS_TERRAFORM_STATE_BUCKET" -backend-config="key=$AWS_TF_STATE_KEY_INFRA" -backend-config="region=$AWS_REGION" -backend-config="expected_bucket_owner=$AWS_EXPECTED_ACCOUNT_ID" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
 terraform -chdir=infra state list
 umask 077
 terraform -chdir=infra state pull > "$SECURE_BACKUP_DIR/infra-before.json"
-terraform -chdir=infra/newrelic init -input=false -backend-config="bucket=$AWS_TERRAFORM_STATE_BUCKET" -backend-config="key=$AWS_TF_STATE_KEY_NEWRELIC" -backend-config="region=$AWS_REGION" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+terraform -chdir=infra/newrelic init -input=false -backend-config="bucket=$AWS_TERRAFORM_STATE_BUCKET" -backend-config="key=$AWS_TF_STATE_KEY_NEWRELIC" -backend-config="region=$AWS_REGION" -backend-config="expected_bucket_owner=$AWS_EXPECTED_ACCOUNT_ID" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
 terraform -chdir=infra/newrelic state list
 terraform -chdir=infra/newrelic state pull > "$SECURE_BACKUP_DIR/newrelic-before.json"
 ```

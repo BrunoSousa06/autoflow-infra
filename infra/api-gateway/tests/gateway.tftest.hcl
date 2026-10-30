@@ -8,7 +8,7 @@ mock_provider "aws" {
   mock_data "aws_lambda_function" {
     defaults = {
       function_name = "autoflow-test"
-      invoke_arn    = "arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/arn:aws:lambda:us-east-1:123456789012:function:autoflow-test/invocations"
+      invoke_arn    = "mock-lambda-invoke-uri"
     }
   }
 }
@@ -38,8 +38,9 @@ override_resource {
   }
 }
 variables {
-  expected_account_id    = "123456789012"
+  expected_account_id    = format("%012d", 1234)
   terraform_state_bucket = "autoflow-teste-state"
+  infra_state_key        = "homolog/test-infra.tfstate"
   lambda_function_name   = "autoflow-test"
 }
 run "contratos_e_isolamento" {

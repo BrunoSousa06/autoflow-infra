@@ -17,9 +17,11 @@ PERMANENT_CIDR = "189.6.8.245/32"
 UPDATE_RETRIES = 3
 UPDATE_WAIT_ATTEMPTS = 60
 UPDATE_WAIT_SECONDS = 10
-NEWRELIC_LEASE_PREFIX = "ci/eks-endpoint-lease-newrelic-"
+NEWRELIC_LEASE_NAME_PREFIX = "eks-endpoint-lease-newrelic-"
+LEGACY_NEWRELIC_LEASE_PREFIX = f"ci/{NEWRELIC_LEASE_NAME_PREFIX}"
 NEWRELIC_LEASE_KEY = re.compile(
-    r"^ci/eks-endpoint-lease-newrelic-(?P<run_id>[0-9]+)-(?P<attempt>[1-9][0-9]*)-(?P<job>plan|apply)\.json$"
+    r"^ci/(?:(?P<environment>homolog|production)/)?eks-endpoint-lease-newrelic-"
+    r"(?P<run_id>[0-9]+)-(?P<attempt>[1-9][0-9]*)-(?P<job>plan|apply)\.json$"
 )
 
 
@@ -338,6 +340,9 @@ def newrelic_workflow_runs(token, repository):
 def reconcile_orphan_leases(aws, cluster, region, token, repository, current_run_id, current_attempt):
     if not isinstance(current_attempt, int) or isinstance(current_attempt, bool) or current_attempt <= 0:
         raise RuntimeError("Attempt atual do GitHub inválido; leases mantidos.")
+    environment = os.environ.get("GITHUB_DEPLOYMENT_ENVIRONMENT")
+    if environment not in {"homolog", "production"}:
+        raise RuntimeError("Environment GitHub inválido; leases mantidos.")
     runs = newrelic_workflow_runs(token, repository)
     reconciled = 0
     for run in runs:
@@ -355,14 +360,17 @@ def reconcile_orphan_leases(aws, cluster, region, token, repository, current_run
             completed_attempts = min(completed_attempts, max(0, current_attempt - 1))
         for attempt in range(1, completed_attempts + 1):
             for job in ("plan", "apply"):
-                key = f"{NEWRELIC_LEASE_PREFIX}{run_id}-{attempt}-{job}.json"
-                if not NEWRELIC_LEASE_KEY.fullmatch(key):
-                    raise RuntimeError("Chave de lease fora do padrão esperado; operação bloqueada.")
-                lease = load_lease(key)
-                if lease is None:
-                    continue
-                _cleanup(aws, cluster, region, lease, lease_key=key)
-                reconciled += 1
+                keys = [f"ci/{environment}/{NEWRELIC_LEASE_NAME_PREFIX}{run_id}-{attempt}-{job}.json"]
+                if environment == "homolog":
+                    keys.append(f"{LEGACY_NEWRELIC_LEASE_PREFIX}{run_id}-{attempt}-{job}.json")
+                for key in keys:
+                    if not NEWRELIC_LEASE_KEY.fullmatch(key):
+                        raise RuntimeError("Chave de lease fora do padrão esperado; operação bloqueada.")
+                    lease = load_lease(key)
+                    if lease is None:
+                        continue
+                    _cleanup(aws, cluster, region, lease, lease_key=key)
+                    reconciled += 1
     return reconciled
 
 
