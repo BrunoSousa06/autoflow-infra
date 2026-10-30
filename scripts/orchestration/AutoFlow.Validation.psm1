@@ -32,11 +32,6 @@ function Add-AutoFlowValidationQueryError {
     })
 }
 
-function Test-AutoFlowProperty {
-    param($Object, [string]$Name)
-    return ($null -ne $Object -and $null -ne $Object.PSObject.Properties[$Name])
-}
-
 function Test-AutoFlowCorsValue {
     param([string]$Value)
     try {
@@ -67,7 +62,7 @@ function Test-AutoFlowEnvironmentProtection {
     )
 
     $rules = @()
-    $reviewerListKnown = (Test-AutoFlowProperty $EnvironmentData 'protection_rules') -and $EnvironmentData.protection_rules -is [System.Array]
+    $reviewerListKnown = (Test-AutoFlowObjectProperty $EnvironmentData 'protection_rules') -and $EnvironmentData.protection_rules -is [System.Array]
     if (-not $reviewerListKnown) {
         Add-AutoFlowFinding $Findings 'REQUIRED_REVIEWERS_UNKNOWN' 'UNKNOWN' $Repository $Environment 'A API nao retornou uma lista valida de protection_rules.'
     } else {
@@ -75,19 +70,19 @@ function Test-AutoFlowEnvironmentProtection {
     }
     $reviewerCount = 0
     foreach ($rule in $rules) {
-        if (-not (Test-AutoFlowProperty $rule 'type') -or $rule.type -isnot [string]) {
+        if (-not (Test-AutoFlowObjectProperty $rule 'type') -or $rule.type -isnot [string]) {
             Add-AutoFlowFinding $Findings 'INVALID_PROTECTION_RULE' 'UNKNOWN' $Repository $Environment 'Uma protection rule retornada nao possui type valido.'
             $reviewerListKnown = $false
             continue
         }
         if ($rule.type -eq 'required_reviewers') {
-            if (-not (Test-AutoFlowProperty $rule 'reviewers') -or $rule.reviewers -isnot [System.Array]) {
+            if (-not (Test-AutoFlowObjectProperty $rule 'reviewers') -or $rule.reviewers -isnot [System.Array]) {
                 Add-AutoFlowFinding $Findings 'INVALID_REVIEWER_POLICY' 'UNKNOWN' $Repository $Environment 'A API nao retornou a lista de Required reviewers.'
                 $reviewerListKnown = $false
                 continue
             }
             foreach ($reviewer in @($rule.reviewers)) {
-                if (-not (Test-AutoFlowProperty $reviewer 'type') -or $reviewer.type -isnot [string] -or [string]::IsNullOrWhiteSpace($reviewer.type)) {
+                if (-not (Test-AutoFlowObjectProperty $reviewer 'type') -or $reviewer.type -isnot [string] -or [string]::IsNullOrWhiteSpace($reviewer.type)) {
                     Add-AutoFlowFinding $Findings 'INVALID_REVIEWER_POLICY' 'UNKNOWN' $Repository $Environment 'Um Required reviewer retornado nao possui type valido.'
                     $reviewerListKnown = $false
                 } else {
@@ -100,7 +95,7 @@ function Test-AutoFlowEnvironmentProtection {
         Add-AutoFlowFinding $Findings 'REQUIRED_REVIEWERS_MISSING' 'INCONSISTENT' $Repository $Environment 'Nenhum Required reviewer foi confirmado pela API.'
     }
 
-    if (-not (Test-AutoFlowProperty $EnvironmentData 'deployment_branch_policy')) {
+    if (-not (Test-AutoFlowObjectProperty $EnvironmentData 'deployment_branch_policy')) {
         Add-AutoFlowFinding $Findings 'BRANCH_POLICY_UNKNOWN' 'UNKNOWN' $Repository $Environment 'A API nao retornou deployment_branch_policy.'
         return
     }
@@ -109,7 +104,7 @@ function Test-AutoFlowEnvironmentProtection {
         Add-AutoFlowFinding $Findings 'BRANCH_POLICY_UNRESTRICTED' 'INCONSISTENT' $Repository $Environment 'O Environment nao restringe deployments por branch.'
         return
     }
-    if (-not (Test-AutoFlowProperty $policy 'protected_branches') -or -not (Test-AutoFlowProperty $policy 'custom_branch_policies') -or $policy.protected_branches -isnot [bool] -or $policy.custom_branch_policies -isnot [bool]) {
+    if (-not (Test-AutoFlowObjectProperty $policy 'protected_branches') -or -not (Test-AutoFlowObjectProperty $policy 'custom_branch_policies') -or $policy.protected_branches -isnot [bool] -or $policy.custom_branch_policies -isnot [bool]) {
         Add-AutoFlowFinding $Findings 'BRANCH_POLICY_INVALID' 'UNKNOWN' $Repository $Environment 'O conteudo de deployment_branch_policy e incompleto.'
         return
     }
@@ -128,13 +123,13 @@ function Test-AutoFlowEnvironmentProtection {
             Add-AutoFlowFinding $Findings 'BRANCH_POLICY_UNKNOWN' 'UNKNOWN' $Repository $Environment 'Nao foi possivel consultar as branch policies customizadas.'
             return
         }
-        if (@($policies.Data | Where-Object { -not (Test-AutoFlowProperty $_ 'name') -or $_.name -isnot [string] }).Count -gt 0) {
+        if (@($policies.Data | Where-Object { -not (Test-AutoFlowObjectProperty $_ 'name') -or $_.name -isnot [string] }).Count -gt 0) {
             Add-AutoFlowValidationQueryError $QueryErrors $Repository 'deployment_branch_policies' (New-AutoFlowApiResult -Success $false -ErrorKind 'INVALID_RESPONSE' -Message 'Branch policy sem nome valido.')
             Add-AutoFlowFinding $Findings 'BRANCH_POLICY_UNKNOWN' 'UNKNOWN' $Repository $Environment 'A API retornou branch policies incompletas.'
             return
         }
-        $matched = @($policies.Data | Where-Object { (Test-AutoFlowProperty $_ 'name') -and [string]$_.name -ceq $ExpectedBranch }).Count -gt 0
-        $policyNames = @($policies.Data | Where-Object { Test-AutoFlowProperty $_ 'name' } | ForEach-Object { [string]$_.name })
+        $matched = @($policies.Data | Where-Object { (Test-AutoFlowObjectProperty $_ 'name') -and [string]$_.name -ceq $ExpectedBranch }).Count -gt 0
+        $policyNames = @($policies.Data | Where-Object { Test-AutoFlowObjectProperty $_ 'name' } | ForEach-Object { [string]$_.name })
         if (-not $matched -or $policyNames.Count -ne 1) {
             Add-AutoFlowFinding $Findings 'BRANCH_POLICY_BRANCH_MISMATCH' 'INCONSISTENT' $Repository $Environment "A policy customizada deve permitir somente a branch $ExpectedBranch."
         }
@@ -147,7 +142,7 @@ function Test-AutoFlowEnvironmentProtection {
         Add-AutoFlowFinding $Findings 'BRANCH_POLICY_UNKNOWN' 'UNKNOWN' $Repository $Environment "Nao foi possivel confirmar a existencia/protecao da branch $ExpectedBranch ($($branchResponse.ErrorKind)); 404 nao e tratado como ausencia confirmada."
         return
     }
-    if (-not (Test-AutoFlowProperty $branchResponse.Data 'name') -or $branchResponse.Data.name -isnot [string] -or $branchResponse.Data.name -cne $ExpectedBranch -or -not (Test-AutoFlowProperty $branchResponse.Data 'protected') -or $branchResponse.Data.protected -isnot [bool]) {
+    if (-not (Test-AutoFlowObjectProperty $branchResponse.Data 'name') -or $branchResponse.Data.name -isnot [string] -or $branchResponse.Data.name -cne $ExpectedBranch -or -not (Test-AutoFlowObjectProperty $branchResponse.Data 'protected') -or $branchResponse.Data.protected -isnot [bool]) {
         Add-AutoFlowFinding $Findings 'BRANCH_POLICY_INVALID_RESPONSE' 'UNKNOWN' $Repository $Environment 'A API retornou dados incompletos para a branch.'
         return
     }
@@ -159,7 +154,7 @@ function Test-AutoFlowEnvironmentProtection {
         if (-not $otherResponse.Success) {
             Add-AutoFlowValidationQueryError $QueryErrors $Repository "branch:$OtherEnvironmentBranch" $otherResponse
             Add-AutoFlowFinding $Findings 'BRANCH_POLICY_ISOLATION_UNKNOWN' 'UNKNOWN' $Repository $Environment 'Nao foi possivel verificar se a policy protected_branches tambem aceita a branch do outro Environment.'
-        } elseif (-not (Test-AutoFlowProperty $otherResponse.Data 'protected') -or $otherResponse.Data.protected -isnot [bool] -or -not (Test-AutoFlowProperty $otherResponse.Data 'name') -or $otherResponse.Data.name -isnot [string] -or $otherResponse.Data.name -cne $OtherEnvironmentBranch) {
+        } elseif (-not (Test-AutoFlowObjectProperty $otherResponse.Data 'protected') -or $otherResponse.Data.protected -isnot [bool] -or -not (Test-AutoFlowObjectProperty $otherResponse.Data 'name') -or $otherResponse.Data.name -isnot [string] -or $otherResponse.Data.name -cne $OtherEnvironmentBranch) {
             Add-AutoFlowFinding $Findings 'BRANCH_POLICY_ISOLATION_UNKNOWN' 'UNKNOWN' $Repository $Environment 'A API retornou dados incompletos para a branch do outro Environment.'
         } elseif ([bool]$otherResponse.Data.protected) {
             Add-AutoFlowFinding $Findings 'BRANCH_POLICY_CROSSES_ENVIRONMENTS' 'INCONSISTENT' $Repository $Environment "A policy protected_branches tambem permite a branch $OtherEnvironmentBranch do outro Environment."
@@ -196,7 +191,7 @@ function Get-AutoFlowEnvironmentSnapshot {
         Add-AutoFlowFinding $Findings 'ENVIRONMENT_UNKNOWN' 'UNKNOWN' $RepositoryConfig.Name $Environment "Nao foi possivel consultar o Environment ($($environmentResponse.ErrorKind)); ausencia so e confirmada por inventario valido."
         return [pscustomobject]$snapshot
     }
-    if (-not (Test-AutoFlowProperty $environmentResponse.Data 'name') -or $environmentResponse.Data.name -isnot [string] -or $environmentResponse.Data.name -cne $Environment) {
+    if (-not (Test-AutoFlowObjectProperty $environmentResponse.Data 'name') -or $environmentResponse.Data.name -isnot [string] -or $environmentResponse.Data.name -cne $Environment) {
         $snapshot.State = 'INVALID_RESPONSE'
         Add-AutoFlowValidationQueryError $QueryErrors $RepositoryConfig.Name "environment:$Environment" (New-AutoFlowApiResult -Success $false -ErrorKind 'INVALID_RESPONSE' -Message 'Environment retornado nao corresponde ao solicitado.')
         Add-AutoFlowFinding $Findings 'ENVIRONMENT_UNKNOWN' 'UNKNOWN' $RepositoryConfig.Name $Environment 'A API retornou um Environment inesperado.'
@@ -216,7 +211,7 @@ function Get-AutoFlowEnvironmentSnapshot {
         $variables = @{}
         $invalid = $false
         foreach ($variable in @($variablesResponse.Data)) {
-            if (-not (Test-AutoFlowProperty $variable 'name') -or $variable.name -isnot [string] -or -not (Test-AutoFlowProperty $variable 'value') -or $variable.value -isnot [string]) {
+            if (-not (Test-AutoFlowObjectProperty $variable 'name') -or $variable.name -isnot [string] -or -not (Test-AutoFlowObjectProperty $variable 'value') -or $variable.value -isnot [string]) {
                 $invalid = $true
                 break
             }
@@ -241,7 +236,7 @@ function Get-AutoFlowEnvironmentSnapshot {
         $secretNames = New-Object System.Collections.Generic.List[string]
         $invalid = $false
         foreach ($secret in @($secretsResponse.Data)) {
-            if (-not (Test-AutoFlowProperty $secret 'name') -or $secret.name -isnot [string]) {
+            if (-not (Test-AutoFlowObjectProperty $secret 'name') -or $secret.name -isnot [string]) {
                 $invalid = $true
                 break
             }
@@ -431,7 +426,7 @@ function Invoke-AutoFlowValidation {
             }
             continue
         }
-        if (-not (Test-AutoFlowProperty $repoResponse.Data 'full_name') -or [string]$repoResponse.Data.full_name -ine $repository.FullName) {
+        if (-not (Test-AutoFlowObjectProperty $repoResponse.Data 'full_name') -or [string]$repoResponse.Data.full_name -ine $repository.FullName) {
             Add-AutoFlowValidationQueryError $queryErrors $repository.Name 'repository' (New-AutoFlowApiResult -Success $false -ErrorKind 'INVALID_RESPONSE' -Message 'Repositorio retornado invalido.')
             Add-AutoFlowFinding $findings 'REPOSITORY_UNKNOWN' 'UNKNOWN' $repository.Name '' 'A API retornou metadados de repositorio invalidos.'
             continue
@@ -452,7 +447,7 @@ function Invoke-AutoFlowValidation {
         $environmentNames = New-Object System.Collections.Generic.List[string]
         $invalidEnvironmentInventory = $false
         foreach ($environmentEntry in @($environmentInventory.Data)) {
-            if (-not (Test-AutoFlowProperty $environmentEntry 'name')) {
+            if (-not (Test-AutoFlowObjectProperty $environmentEntry 'name')) {
                 $invalidEnvironmentInventory = $true
                 break
             }

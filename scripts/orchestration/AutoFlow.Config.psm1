@@ -93,7 +93,7 @@ $script:AutoFlowStateRoots = @(
         Name = 'application'
         Repository = 'autoflow'
         KeyVariable = 'AWS_TF_STATE_KEY'
-        # This is the current default of autoflow/infra/vars.tf; the workflow does not override it.
+        # Este e o default atual de autoflow/infra/vars.tf; o workflow nao o substitui.
         ConsumeDefaults = @{ rds = 'rds/terraform.tfstate' }
         ConsumeVariables = @{}
     },

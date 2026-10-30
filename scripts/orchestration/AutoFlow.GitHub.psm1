@@ -390,4 +390,4 @@ function Test-AutoFlowGitHubUrl {
     return ($uri.Scheme -eq 'https' -and $uri.Host -eq 'github.com' -and $uri.AbsolutePath.StartsWith("/$FullName/", [StringComparison]::OrdinalIgnoreCase))
 }
 
-Export-ModuleMember -Function Invoke-AutoFlowGitHubApi, Get-AutoFlowApiCollection, Get-AutoFlowStatus, New-AutoFlowApiResult, ConvertFrom-AutoFlowGhResponse, Test-AutoFlowGitHubUrl
+Export-ModuleMember -Function Invoke-AutoFlowGitHubApi, Get-AutoFlowApiCollection, Get-AutoFlowStatus, New-AutoFlowApiResult, ConvertFrom-AutoFlowGhResponse, Test-AutoFlowGitHubUrl, Test-AutoFlowObjectProperty
