@@ -1,9 +1,10 @@
 data "terraform_remote_state" "eks" {
   backend = "s3"
   config = {
-    bucket = var.terraform_state_bucket
-    key    = var.infra_state_key
-    region = var.aws_region
+    bucket              = var.terraform_state_bucket
+    key                 = var.infra_state_key
+    region              = var.aws_region
+    allowed_account_ids = [var.expected_account_id]
   }
 }
 data "aws_eks_cluster" "this" { name = var.cluster_name }

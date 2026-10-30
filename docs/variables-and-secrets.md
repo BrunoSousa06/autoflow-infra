@@ -47,7 +47,7 @@ Os três nomes não são intercambiáveis: `approve_state_bucket_creation` é o 
 | `project_name` | Opcional; default `autoflow`; workflow define `autoflow` ou `autoflow-production` | Deriva nomes do cluster/node group e tags de descoberta da VPC, route tables, EIP/NAT, Security Group e subnets. O valor `autoflow` preserva a identificação existente de homologação. |
 | `region_default` | Opcional; `us-east-1` | Região; workflow mapeia `AWS_REGION`. |
 | `aws_profile` | Opcional; `null` | Perfil AWS local. |
-| `aws_allowed_account_ids` | Obrigatório; sem default, lista não vazia de IDs de 12 dígitos | Guard do provider; `AWS_EXPECTED_ACCOUNT_ID` convertido em lista pelo workflow. |
+| `aws_allowed_account_ids` | Obrigatório; sem default, lista não vazia de IDs de 12 dígitos | Guard do provider e dos backends/remote states S3; o workflow deriva a lista da variável externa `AWS_EXPECTED_ACCOUNT_ID`. |
 | `cidr_vpc` | Opcional; `10.0.0.0/16` | Endereçamento VPC. |
 | `cluster_role_arn`, `node_role_arn`, `operator_access_role_arn` | Obrigatórios, sem default | `pipeline.yml` descobre as roles de cluster e nodes por STS/IAM; localmente, forneça os `TF_VAR_*` após executar o preflight de descoberta. A role operador é derivada da sessão STS. O Apply valida as roles embutidas no Plan aprovado, sem redescobri-las. |
 | `instance_type` | Opcional; `t3.medium` | Tipo de instância node. |

@@ -11,6 +11,8 @@ Este procedimento cobre somente a transferência de ownership Terraform entre `i
 5. Criar backup de cada state com `terraform state pull`, em local criptografado, acesso mínimo e retenção aprovada. Registrar hash, versão e horário sem publicar o conteúdo; confirmar leitura do backup antes de prosseguir.
 6. Garantir que somente um root terá ownership após cada etapa. Plan destrutivo do root antigo permanece bloqueado pelo guard `check-legacy-plan`; não usar `allow_destructive` para contorná-lo.
 
+Antes de qualquer init remoto, obtenha `AWS_EXPECTED_ACCOUNT_ID`, bucket e keys da configuração externa aprovada, derive `TF_VAR_aws_allowed_account_ids` a partir desse ID e valide a identidade por STS. O Terraform 1.16.5 aceita `allowed_account_ids` no backend S3; `expected_bucket_owner` não deve ser passado ao Terraform. A verificação de owner continua nas chamadas AWS CLI que suportam `--expected-bucket-owner`. Para validar os argumentos sem AWS ou state remoto, execute `python -m unittest discover -s scripts -p "test_terraform_backend_config.py" -v`.
+
 ## Inventário e reconciliação no mesmo root
 
 No mesmo root, o workflow coleta state e inventário remoto completo e aplica estas regras:
@@ -30,11 +32,11 @@ O input de reconciliação é falso por padrão e não autoriza `state rm`, impo
 Exemplo de inspeção depois de confirmar bucket/key autorizados (os comandos leem state; a saída deve permanecer em diretório restrito):
 
 ```bash
-terraform -chdir=infra init -input=false -backend-config="bucket=$AWS_TERRAFORM_STATE_BUCKET" -backend-config="key=$AWS_TF_STATE_KEY_INFRA" -backend-config="region=$AWS_REGION" -backend-config="expected_bucket_owner=$AWS_EXPECTED_ACCOUNT_ID" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+terraform -chdir=infra init -input=false -backend-config="bucket=$AWS_TERRAFORM_STATE_BUCKET" -backend-config="key=$AWS_TF_STATE_KEY_INFRA" -backend-config="region=$AWS_REGION" -backend-config="allowed_account_ids=$TF_VAR_aws_allowed_account_ids" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
 terraform -chdir=infra state list
 umask 077
 terraform -chdir=infra state pull > "$SECURE_BACKUP_DIR/infra-before.json"
-terraform -chdir=infra/newrelic init -input=false -backend-config="bucket=$AWS_TERRAFORM_STATE_BUCKET" -backend-config="key=$AWS_TF_STATE_KEY_NEWRELIC" -backend-config="region=$AWS_REGION" -backend-config="expected_bucket_owner=$AWS_EXPECTED_ACCOUNT_ID" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+terraform -chdir=infra/newrelic init -input=false -backend-config="bucket=$AWS_TERRAFORM_STATE_BUCKET" -backend-config="key=$AWS_TF_STATE_KEY_NEWRELIC" -backend-config="region=$AWS_REGION" -backend-config="allowed_account_ids=$TF_VAR_aws_allowed_account_ids" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
 terraform -chdir=infra/newrelic state list
 terraform -chdir=infra/newrelic state pull > "$SECURE_BACKUP_DIR/newrelic-before.json"
 ```

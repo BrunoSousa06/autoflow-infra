@@ -7,6 +7,7 @@ on:
       - infra/newrelic/**
       - scripts/newrelic*
       - scripts/test_newrelic*
+      - scripts/test_terraform_backend_config.py
       - scripts/validate_github_environment.py
       - scripts/test_github_environment_guards.py
       - scripts/eks_endpoint_access.py
@@ -52,6 +53,7 @@ jobs:
         with:
           terraform_version: "1.16.5"
           terraform_wrapper: false
+      - run: python -m unittest discover -s scripts -p "test_terraform_backend_config.py" -v
       - run: python -m unittest discover -s scripts -p "test_newrelic_*.py" -v
       - run: terraform fmt -check -recursive infra/newrelic
       - run: terraform -chdir=infra/newrelic init -backend=false -input=false -lockfile=readonly
@@ -158,10 +160,10 @@ jobs:
           set -euo pipefail
           umask 077
           cd infra
-          terraform init -input=false -lockfile=readonly -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$AWS_TF_STATE_KEY_INFRA" -backend-config="region=$AWS_REGION" -backend-config="expected_bucket_owner=$AWS_EXPECTED_ACCOUNT_ID" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+          terraform init -input=false -lockfile=readonly -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$AWS_TF_STATE_KEY_INFRA" -backend-config="region=$AWS_REGION" -backend-config="allowed_account_ids=$TF_VAR_aws_allowed_account_ids" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
           terraform state pull > "$RUNNER_TEMP/legacy-state.json"
           cd newrelic
-          terraform init -input=false -lockfile=readonly -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="expected_bucket_owner=$AWS_EXPECTED_ACCOUNT_ID" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+          terraform init -input=false -lockfile=readonly -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="allowed_account_ids=$TF_VAR_aws_allowed_account_ids" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
           if aws s3api head-object --bucket "$TF_STATE_BUCKET" --key "$TF_STATE_KEY" --expected-bucket-owner "$AWS_EXPECTED_ACCOUNT_ID" >/dev/null 2>"$RUNNER_TEMP/newrelic-head-error"; then
             echo "initialized=true" >> "$GITHUB_OUTPUT"
             terraform state pull > "$RUNNER_TEMP/newrelic-state.json"
@@ -423,10 +425,10 @@ jobs:
             echo "absent" > "$RUNNER_TEMP/helm-presence"
           fi
           cd infra
-          terraform init -input=false -lockfile=readonly -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$AWS_TF_STATE_KEY_INFRA" -backend-config="region=$AWS_REGION" -backend-config="expected_bucket_owner=$AWS_EXPECTED_ACCOUNT_ID" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+          terraform init -input=false -lockfile=readonly -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$AWS_TF_STATE_KEY_INFRA" -backend-config="region=$AWS_REGION" -backend-config="allowed_account_ids=$TF_VAR_aws_allowed_account_ids" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
           terraform state pull > "$RUNNER_TEMP/legacy-state.json"
           cd newrelic
-          terraform init -input=false -lockfile=readonly -reconfigure -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="expected_bucket_owner=$AWS_EXPECTED_ACCOUNT_ID" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
+          terraform init -input=false -lockfile=readonly -reconfigure -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=$TF_STATE_KEY" -backend-config="region=$AWS_REGION" -backend-config="allowed_account_ids=$TF_VAR_aws_allowed_account_ids" -backend-config="encrypt=true" -backend-config="use_lockfile=true"
           if aws s3api head-object --bucket "$TF_STATE_BUCKET" --key "$TF_STATE_KEY" --expected-bucket-owner "$AWS_EXPECTED_ACCOUNT_ID" >/dev/null 2>"$RUNNER_TEMP/newrelic-head-error"; then
             terraform state pull > "$RUNNER_TEMP/newrelic-state.json"
           elif grep -Eqi '404|NoSuchKey|Not Found' "$RUNNER_TEMP/newrelic-head-error"; then

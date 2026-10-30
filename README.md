@@ -71,7 +71,28 @@ python scripts/terraform_state_contract.py <caminho-externo-para-configuracao.js
 
 O comando exige prefixos por Environment, seis keys exclusivas por bucket, ausência de cruzamento entre homologação e produção, igualdade produtor/consumidor e correspondência de conta, bucket e região. Ele não inicializa backend, consulta objetos S3 ou lê conteúdo de State. Os testes usam apenas valores sintéticos e não definem sufixos autoritativos.
 
-Os backends S3 recebem `expected_bucket_owner`. No Terraform 1.16.5, a configuração do data source embutido `terraform_remote_state` não aceita esse atributo; a validação AWS local mostrou erro de atributo inesperado. Por isso, os workflows verificam previamente cada objeto remoto com `head-object --expected-bucket-owner` usando a mesma conta do Environment, e só depois inicializam Terraform. Essa checagem não lê nem imprime o conteúdo do State.
+Os backends S3 recebem `allowed_account_ids` por `-backend-config`, derivada exclusivamente de `AWS_EXPECTED_ACCOUNT_ID` do Environment; o `terraform_remote_state` do API Gateway usa o mesmo valor externo. Não passe `expected_bucket_owner` ao Terraform 1.16.5. A verificação de ownership permanece nas operações AWS CLI compatíveis, como `head-object --expected-bucket-owner`, antes do init; essa checagem não lê nem imprime o conteúdo do State. Todos os inits remotos mantêm `encrypt=true` e `use_lockfile=true`.
+
+### Validação local dos seis roots Terraform
+
+Na raiz do workspace que contém os quatro repositórios, inicialize sem backend remoto e valide cada root (não use credenciais AWS para estes comandos):
+
+```bash
+terraform -chdir=autoflow-infra/infra init -backend=false -input=false
+terraform -chdir=autoflow-infra/infra validate
+terraform -chdir=autoflow-infra/infra/newrelic init -backend=false -input=false
+terraform -chdir=autoflow-infra/infra/newrelic validate
+terraform -chdir=autoflow-infra/infra/api-gateway init -backend=false -input=false
+terraform -chdir=autoflow-infra/infra/api-gateway validate
+terraform -chdir=autoflow/infra init -backend=false -input=false
+terraform -chdir=autoflow/infra validate
+terraform -chdir=autoflow-lambda/infra init -backend=false -input=false
+terraform -chdir=autoflow-lambda/infra validate
+terraform -chdir=autoflow-db/infra init -backend=false -input=false
+terraform -chdir=autoflow-db/infra validate
+```
+
+Para verificar argumentos do backend contra o Terraform 1.16.5 sem acessar AWS, execute `python -m unittest discover -s autoflow-infra/scripts -p "test_terraform_backend_config.py" -v`. O teste de init S3 usa um bucket fictício, configuração temporária, sem credenciais e endpoint restrito a `127.0.0.1`; a falha de conexão local é esperada e nenhuma API AWS ou State remoto é alcançado.
 
 CI executa em PRs; branches feature não acessam AWS nem executam Plan/Apply. Os jobs protegidos obtêm configuração diretamente de `${{ vars.* }}` e `${{ secrets.* }}` e falham antes de configurar credenciais AWS quando valores obrigatórios estão vazios, conta/região são inválidas ou State Keys não pertencem ao Environment selecionado. Nenhum workflow consulta APIs administrativas de Variables, Secrets ou proteção de Environments com `GITHUB_TOKEN`. A aprovação nativa do Environment continua ativa; `TERRAFORM_APPLY_APPROVAL_CONFIGURED=true` é um gate adicional e independente. Antes de definir esse marcador, valide externamente Required reviewers e políticas de branch com uma identidade administrativa autorizada. No workflow `Pipeline`, `approve_state_bucket_creation=true` inicia somente o job isolado de bootstrap e ignora `validate`, Plan e Apply; `apply`, `approve_eks_state_reconciliation` e `allow_destructive` devem ficar `false`. O Plan comum somente verifica existência, propriedade e controles do bucket. Plan e Apply posteriores exigem dispatch separado; Apply reutiliza o artifact criptografado, vinculado ao run/commit e ao fingerprint. `APPROVE_CREATE` era uma Variable legada do fluxo inline e não é consumida pelo workflow atual. Para recuperação de uma falha antiga HTTP 403, siga o [procedimento de bootstrap](docs/state-bucket-bootstrap.md#controles-falhas-e-recuperacao). Exclusões e substituições continuam bloqueadas por padrão. Consulte a [RFC](docs/api-gateway/rfc-api-gateway.md) e o [runbook](docs/api-gateway/runbook.md). Nenhum workflow instala gateways adicionais.
 
