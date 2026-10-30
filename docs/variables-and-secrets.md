@@ -1,6 +1,6 @@
 # Variables e secrets
 
-Inventário observado nos workflows e Terraform deste repositório. `develop` usa o Environment `homolog`; `main` usa `production`; Apply exige dispatch manual e reviewers efetivos. New Relic é consumido apenas por `newrelic.yml`. CI de PR não requer acesso AWS.
+Inventário observado nos workflows e Terraform deste repositório. Os workflows selecionam o Environment `homolog` em `develop` e `production` em `main`; Apply exige dispatch manual e a proteção do Environment. New Relic é consumido apenas por `newrelic.yml`. Após reset do Learner Lab, reexecute as pipelines CI/CD correspondentes para provisionar novamente os recursos. CI de PR não requer acesso AWS.
 
 ## GitHub Actions — Secrets
 
