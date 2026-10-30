@@ -120,12 +120,17 @@ def discover_imports(
     addresses: set[str],
     state_ids: dict[str, str],
     run: Callable[..., Any] = subprocess.run,
+    project_name: str = "autoflow",
 ) -> list[tuple[str, str]]:
-    if ACCOUNT_ID_PATTERN.fullmatch(expected_account or "") is None or not region:
-        raise NetworkImportError("Conta esperada e região válidas são obrigatórias.")
+    if (ACCOUNT_ID_PATTERN.fullmatch(expected_account or "") is None or not region
+            or re.fullmatch(r"[a-z][a-z0-9-]*", project_name or "") is None):
+        raise NetworkImportError("Conta, região e nome de projeto válidos são obrigatórios.")
+    vpc_name = "main-vpc" if project_name == "autoflow" else f"main-vpc-{project_name}"
+    cluster_name = f"eks-{project_name}"
+    nodegroup_name = f"nodeg-{project_name}"
     aws = ["aws"]
     vpcs = run_json(
-        aws + ["ec2", "describe-vpcs", "--region", region, "--filters", "Name=tag:Name,Values=main-vpc"],
+        aws + ["ec2", "describe-vpcs", "--region", region, "--filters", f"Name=tag:Name,Values={vpc_name}"],
         run,
     ).get("Vpcs")
     if not isinstance(vpcs, list):
@@ -133,11 +138,11 @@ def discover_imports(
     if not vpcs:
         return []
     if len(vpcs) != 1:
-        raise NetworkImportError("Mais de uma VPC candidata main-vpc; reconciliação ambígua.")
+        raise NetworkImportError(f"Mais de uma VPC candidata {vpc_name}; reconciliação ambígua.")
     vpc = vpcs[0]
     vpc_id = vpc.get("VpcId")
     if (not isinstance(vpc_id, str) or vpc.get("OwnerId") != expected_account
-            or vpc.get("CidrBlock") != "10.0.0.0/16" or _tag_map(vpc).get("Name") != "main-vpc"):
+            or vpc.get("CidrBlock") != "10.0.0.0/16" or _tag_map(vpc).get("Name") != vpc_name):
         raise NetworkImportError("VPC candidata não corresponde a owner/CIDR/tag do root Terraform.")
 
     for attribute in ("enableDnsSupport", "enableDnsHostnames"):
@@ -172,7 +177,7 @@ def discover_imports(
                 or subnet.get("AvailabilityZone") != zone or subnet.get("MapPublicIpOnLaunch") is not False
                 or tags.get("Name") != "private-subnet"
                 or tags.get("kubernetes.io/role/internal-elb") != "1"
-                or tags.get("kubernetes.io/cluster/eks-autoflow") != "shared"):
+                or tags.get(f"kubernetes.io/cluster/{cluster_name}") != "shared"):
             raise NetworkImportError(f"Subnet {cidr} não corresponde integralmente à declaração privada Terraform.")
         subnet_id = subnet.get("SubnetId")
         if not isinstance(subnet_id, str):
@@ -192,7 +197,7 @@ def discover_imports(
                     or subnet.get("AvailabilityZone") != zone or subnet.get("MapPublicIpOnLaunch") is not True
                     or tags.get("Name") != "public-subnet"
                     or tags.get("kubernetes.io/role/elb") != "1"
-                    or tags.get("kubernetes.io/cluster/eks-autoflow") != "shared"):
+                    or tags.get(f"kubernetes.io/cluster/{cluster_name}") != "shared"):
                 raise NetworkImportError(f"Subnet pública {cidr} não corresponde à declaração Terraform.")
             _reject_untracked_survivor(
                 f"aws_subnet.subnet_public[{index}]", subnet_id, addresses, state_ids
@@ -224,9 +229,10 @@ def discover_imports(
             raise NetworkImportError("Internet Gateway não corresponde à VPC/conta esperada.")
         _reject_untracked_survivor("aws_internet_gateway.igw", gateway_id, addresses, state_ids)
 
-    public_route_tables = [item for item in route_tables if _tag_map(item).get("Name") == "autoflow-public-rt"]
+    public_route_table_name = f"{project_name}-public-rt"
+    public_route_tables = [item for item in route_tables if _tag_map(item).get("Name") == public_route_table_name]
     if len(public_route_tables) > 1:
-        raise NetworkImportError("Mais de uma route table autoflow-public-rt; ownership ambíguo.")
+        raise NetworkImportError(f"Mais de uma route table {public_route_table_name}; ownership ambíguo.")
     if public_route_tables:
         table = public_route_tables[0]
         table_id = table.get("RouteTableId")
@@ -239,17 +245,17 @@ def discover_imports(
 
     eips = run_json(
         aws + ["ec2", "describe-addresses", "--region", region,
-               "--filters", "Name=tag:Name,Values=autoflow-nat-eip"],
+               "--filters", f"Name=tag:Name,Values={project_name}-nat-eip"],
         run,
     ).get("Addresses")
     if not isinstance(eips, list):
         raise NetworkImportError("DescribeAddresses retornou resposta incompleta.")
     if len(eips) > 1:
-        raise NetworkImportError("Mais de um EIP autoflow-nat-eip; ownership ambíguo.")
+        raise NetworkImportError(f"Mais de um EIP {project_name}-nat-eip; ownership ambíguo.")
     if eips:
         eip = eips[0]
         allocation_id = eip.get("AllocationId")
-        if eip.get("Domain") != "vpc" or _tag_map(eip).get("Name") != "autoflow-nat-eip" or not allocation_id:
+        if eip.get("Domain") != "vpc" or _tag_map(eip).get("Name") != f"{project_name}-nat-eip" or not allocation_id:
             raise NetworkImportError("EIP candidato não corresponde à declaração Terraform.")
         _reject_untracked_survivor("aws_eip.nat_eip[0]", allocation_id, addresses, state_ids)
 
@@ -267,21 +273,21 @@ def discover_imports(
         nat_id = nat.get("NatGatewayId")
         allocations = [item.get("AllocationId") for item in nat.get("NatGatewayAddresses", [])]
         if (nat.get("VpcId") != vpc_id or nat.get("State") not in {"available", "pending"}
-                or _tag_map(nat).get("Name") != "autoflow-nat-gateway" or not isinstance(nat_id, str)):
+                or _tag_map(nat).get("Name") != f"{project_name}-nat-gateway" or not isinstance(nat_id, str)):
             raise NetworkImportError("NAT Gateway candidato não corresponde à declaração Terraform.")
         if eips and allocations != [eips[0].get("AllocationId")]:
-            raise NetworkImportError("NAT Gateway não usa o EIP autoflow-nat-eip observado.")
+            raise NetworkImportError(f"NAT Gateway não usa o EIP {project_name}-nat-eip observado.")
         _reject_untracked_survivor("aws_nat_gateway.nat[0]", nat_id, addresses, state_ids)
 
     groups = run_json(
         aws + ["ec2", "describe-security-groups", "--region", region,
-               "--filters", f"Name=vpc-id,Values={vpc_id}", "Name=group-name,Values=autoflow-sg"],
+                "--filters", f"Name=vpc-id,Values={vpc_id}", f"Name=group-name,Values={project_name}-sg"],
         run,
     ).get("SecurityGroups")
     if not isinstance(groups, list):
         raise NetworkImportError("DescribeSecurityGroups retornou resposta incompleta.")
     if len(groups) > 1:
-        raise NetworkImportError("Mais de um security group autoflow-sg; ownership ambíguo.")
+        raise NetworkImportError(f"Mais de um security group {project_name}-sg; ownership ambíguo.")
     if groups:
         group = groups[0]
         group_id = group.get("GroupId")
@@ -292,12 +298,13 @@ def discover_imports(
                 or egress[0].get("IpProtocol") != "-1"
                 or not any(item.get("CidrIp") == "0.0.0.0/0" for item in egress[0].get("IpRanges", []))
                 or not isinstance(group_id, str)):
-            raise NetworkImportError("Security group autoflow-sg não corresponde à declaração Terraform.")
+            raise NetworkImportError(f"Security group {project_name}-sg não corresponde à declaração Terraform.")
         _reject_untracked_survivor("aws_security_group.sg", group_id, addresses, state_ids)
 
-    candidates = [item for item in route_tables if _tag_map(item).get("Name") == "autoflow-private-rt"]
+    private_route_table_name = f"{project_name}-private-rt"
+    candidates = [item for item in route_tables if _tag_map(item).get("Name") == private_route_table_name]
     if len(candidates) > 1:
-        raise NetworkImportError("Mais de uma route table autoflow-private-rt; import ambíguo.")
+        raise NetworkImportError(f"Mais de uma route table {private_route_table_name}; import ambíguo.")
     target = candidates[0] if candidates else None
     target_id = target.get("RouteTableId") if target else None
     if target:
@@ -331,20 +338,20 @@ def discover_imports(
                 imports, state_ids, addresses, address, f"{subnet_id}/{target_id}", association_id
             )
 
-    cluster_present = cluster_exists("eks-autoflow", region, run=run)
+    cluster_present = cluster_exists(cluster_name, region, run=run)
     if cluster_present:
         if "aws_eks_cluster.autoflow" not in addresses:
             raise NetworkImportError("Cluster EKS existente não está no State; import EKS exige reconciliação específica.")
-        if state_ids.get("aws_eks_cluster.autoflow") != "eks-autoflow":
+        if state_ids.get("aws_eks_cluster.autoflow") != cluster_name:
             raise NetworkImportError("O endereço EKS no State não aponta ao cluster esperado.")
         nodegroups = run_json(
-            aws + ["eks", "list-nodegroups", "--cluster-name", "eks-autoflow", "--region", region], run
+            aws + ["eks", "list-nodegroups", "--cluster-name", cluster_name, "--region", region], run
         ).get("nodegroups")
         if not isinstance(nodegroups, list):
             raise NetworkImportError("ListNodegroups retornou resposta incompleta.")
-        if "nodeg-autoflow" in nodegroups:
+        if nodegroup_name in nodegroups:
             node_address = "aws_eks_node_group.node_group"
-            expected_node_id = "eks-autoflow:nodeg-autoflow"
+            expected_node_id = f"{cluster_name}:{nodegroup_name}"
             if node_address not in addresses or state_ids.get(node_address) != expected_node_id:
                 raise NetworkImportError("Node group existente fora do State; reconciliação específica necessária.")
     return imports
@@ -377,13 +384,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expected-account", required=True)
     parser.add_argument("--region", required=True)
+    parser.add_argument("--project-name", required=True)
     parser.add_argument("--allow-reconciliation", choices=("true", "false"), default="false")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
         addresses = state_addresses()
         state_ids = state_resource_ids(addresses)
-        imports = discover_imports(args.expected_account, args.region, addresses, state_ids)
+        imports = discover_imports(
+            args.expected_account, args.region, addresses, state_ids, project_name=args.project_name
+        )
         require_approval(imports, args.allow_reconciliation == "true")
         write_output(args.output, render_imports(imports))
     except (NetworkImportError, RuntimeError, OSError) as error:

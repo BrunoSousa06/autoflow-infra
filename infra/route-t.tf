@@ -8,7 +8,7 @@ resource "aws_route_table" "route_table" {
   }
 
   tags = {
-    Name = "autoflow-public-rt"
+    Name = "${var.project_name}-public-rt"
   }
 
 }
@@ -26,7 +26,7 @@ resource "aws_eip" "nat_eip" {
   count      = var.create_nat_gateway ? 1 : 0
   domain     = "vpc"
   depends_on = [aws_internet_gateway.igw]
-  tags       = { Name = "autoflow-nat-eip" }
+  tags       = { Name = "${var.project_name}-nat-eip" }
 }
 
 resource "aws_nat_gateway" "nat" {
@@ -34,7 +34,7 @@ resource "aws_nat_gateway" "nat" {
   allocation_id = aws_eip.nat_eip[0].id
   subnet_id     = aws_subnet.subnet_public[0].id
 
-  tags       = { Name = "autoflow-nat-gateway" }
+  tags       = { Name = "${var.project_name}-nat-gateway" }
   depends_on = [aws_internet_gateway.igw]
 }
 
@@ -51,7 +51,7 @@ resource "aws_route_table" "route_table_private" {
   }
 
   tags = {
-    Name = "autoflow-private-rt"
+    Name = "${var.project_name}-private-rt"
   }
 }
 

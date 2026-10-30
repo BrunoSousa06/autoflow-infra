@@ -180,7 +180,7 @@ class EndpointAccessTests(unittest.TestCase):
             {"id": 102, "run_attempt": 1, "status": "completed"},
             {"id": 103, "run_attempt": 1, "status": "completed"},
         ]
-        with patch("eks_endpoint_access.newrelic_workflow_runs", return_value=runs), patch(
+        with patch.dict(os.environ, {"GITHUB_DEPLOYMENT_ENVIRONMENT": "homolog"}), patch("eks_endpoint_access.newrelic_workflow_runs", return_value=runs), patch(
             "eks_endpoint_access.load_lease", return_value=None
         ) as load, patch("eks_endpoint_access._cleanup") as cleanup_orphan:
             self.assertEqual(
@@ -189,13 +189,17 @@ class EndpointAccessTests(unittest.TestCase):
                 ),
                 0,
             )
-        self.assertEqual(load.call_count, 4)
+        self.assertEqual(load.call_count, 8)
         self.assertEqual(
             [call.args[0] for call in load.call_args_list],
             [
+                "ci/homolog/eks-endpoint-lease-newrelic-101-1-plan.json",
                 "ci/eks-endpoint-lease-newrelic-101-1-plan.json",
+                "ci/homolog/eks-endpoint-lease-newrelic-101-1-apply.json",
                 "ci/eks-endpoint-lease-newrelic-101-1-apply.json",
+                "ci/homolog/eks-endpoint-lease-newrelic-102-1-plan.json",
                 "ci/eks-endpoint-lease-newrelic-102-1-plan.json",
+                "ci/homolog/eks-endpoint-lease-newrelic-102-1-apply.json",
                 "ci/eks-endpoint-lease-newrelic-102-1-apply.json",
             ],
         )
@@ -203,9 +207,9 @@ class EndpointAccessTests(unittest.TestCase):
 
     def test_orphan_reconciliation_restores_only_a_valid_completed_run_lease(self):
         run = {"id": 205, "run_attempt": 2, "status": "completed"}
-        key = "ci/eks-endpoint-lease-newrelic-205-1-plan.json"
+        key = "ci/homolog/eks-endpoint-lease-newrelic-205-1-plan.json"
         lease = {"temporary_cidr": "20.106.182.211/32", "original_cidrs": ["189.6.8.245/32"]}
-        with patch("eks_endpoint_access.newrelic_workflow_runs", return_value=[run]), patch(
+        with patch.dict(os.environ, {"GITHUB_DEPLOYMENT_ENVIRONMENT": "homolog"}), patch("eks_endpoint_access.newrelic_workflow_runs", return_value=[run]), patch(
             "eks_endpoint_access.load_lease", side_effect=lambda candidate: lease if candidate == key else None
         ) as load, patch("eks_endpoint_access._cleanup") as cleanup_orphan:
             count = reconcile_orphan_leases(
@@ -218,7 +222,7 @@ class EndpointAccessTests(unittest.TestCase):
 
     def test_invalid_orphan_lease_fails_closed_without_cleanup(self):
         run = {"id": 206, "run_attempt": 1, "status": "completed"}
-        with patch("eks_endpoint_access.newrelic_workflow_runs", return_value=[run]), patch(
+        with patch.dict(os.environ, {"GITHUB_DEPLOYMENT_ENVIRONMENT": "homolog"}), patch("eks_endpoint_access.newrelic_workflow_runs", return_value=[run]), patch(
             "eks_endpoint_access.load_lease", side_effect=LeaseReadError("invalid_lease")
         ), patch("eks_endpoint_access._cleanup") as cleanup_orphan:
             with self.assertRaises(LeaseReadError):
@@ -226,6 +230,25 @@ class EndpointAccessTests(unittest.TestCase):
                     FakeAws(set()), "eks-autoflow", "us-east-1", "token", "org/repo", "999", 1
                 )
         cleanup_orphan.assert_not_called()
+
+    def test_production_orphan_reconciliation_does_not_read_homolog_leases(self):
+        run = {"id": 207, "run_attempt": 1, "status": "completed"}
+        with patch.dict(os.environ, {"GITHUB_DEPLOYMENT_ENVIRONMENT": "production"}), patch(
+            "eks_endpoint_access.newrelic_workflow_runs", return_value=[run]
+        ), patch("eks_endpoint_access.load_lease", return_value=None) as load:
+            self.assertEqual(
+                reconcile_orphan_leases(
+                    FakeAws(set()), "eks-autoflow-production", "us-east-1", "token", "org/repo", "999", 1
+                ),
+                0,
+            )
+        self.assertEqual(
+            [call.args[0] for call in load.call_args_list],
+            [
+                "ci/production/eks-endpoint-lease-newrelic-207-1-plan.json",
+                "ci/production/eks-endpoint-lease-newrelic-207-1-apply.json",
+            ],
+        )
 
     @patch("eks_endpoint_access.urlopen")
     def test_workflow_run_history_is_paginated_with_token_header(self, urlopen):
@@ -264,8 +287,8 @@ class EndpointAccessTests(unittest.TestCase):
         workflow = Path(__file__).parents[1] / ".github/workflows/pipeline.yml"
         content = workflow.read_text(encoding="utf-8")
         newrelic = (Path(__file__).parents[1] / ".github/workflows/newrelic.yml").read_text(encoding="utf-8")
-        self.assertIn("group: autoflow-eks-endpoint-deploy", content)
-        self.assertIn("group: autoflow-eks-endpoint-deploy", newrelic)
+        self.assertIn("group: autoflow-eks-endpoint-deploy-${{ github.ref_name }}", content)
+        self.assertIn("group: autoflow-eks-endpoint-deploy-${{ github.ref_name }}", newrelic)
         self.assertIn("cancel-in-progress: false", content)
         self.assertIn("python scripts/eks_endpoint_access.py reconcile-orphans", newrelic)
         for job in ("plan", "apply"):
@@ -294,8 +317,10 @@ class EndpointAccessTests(unittest.TestCase):
         self.assertIn("description: Autorizar exclusões/substituições após revisar o plan", content)
         self.assertIn("python ../scripts/review_eks_plan.py infra-plan.json --allow-destructive \"$ALLOW_DESTRUCTIVE\"", content)
         self.assertIn("default: false", content.split("allow_destructive:", 1)[1].split("permissions:", 1)[0])
-        self.assertIn("ALLOW_DESTRUCTIVE: ${{ (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && (github.event_name == 'push' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false')) || 'false' }}", plan)
-        self.assertIn("ALLOW_DESTRUCTIVE: ${{ github.event_name == 'push' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false') }}", apply)
+        self.assertIn("ALLOW_DESTRUCTIVE: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false' }}", plan)
+        self.assertIn("ALLOW_DESTRUCTIVE: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false' }}", apply)
+        self.assertNotIn("github.event_name == 'push' && 'true'", plan)
+        self.assertNotIn("github.event_name == 'push' && 'true'", apply)
         self.assertIn("inputs.approve_state_bucket_creation && 'true' || 'false'", plan)
         self.assertIn("inputs.approve_eks_state_reconciliation && 'true' || 'false'", plan)
         self.assertIn("inputs.approve_eks_state_reconciliation && 'true' || 'false'", apply)
@@ -311,7 +336,7 @@ class EndpointAccessTests(unittest.TestCase):
         self.assertIn("steps.authorize_eks.outcome != 'skipped'", apply)
         self.assertIn("github.event_name == 'push'", apply)
         self.assertIn("github.event_name == 'workflow_dispatch' && inputs.apply", apply)
-        self.assertIn("((github.ref == 'refs/heads/develop' && github.event_name == 'push') || ((github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'workflow_dispatch' && inputs.apply))", apply)
+        self.assertIn("(((github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'push') || ((github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'workflow_dispatch' && inputs.apply))", apply)
         selected_environment = "environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}"
         self.assertIn(selected_environment, apply)
         self.assertIn("python scripts/verify_aws_account.py", plan)
