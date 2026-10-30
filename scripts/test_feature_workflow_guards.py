@@ -32,13 +32,12 @@ class FeatureWorkflowGuardTests(unittest.TestCase):
         self.assertNotIn("vars.ALLOW_EKS_STATE_RECONCILIATION", network)
         self.assertNotIn("        env:\n          ALLOW_EKS_STATE_RECONCILIATION:", network)
         self.assertIn("--allow-reconciliation \"$ALLOW_EKS_STATE_RECONCILIATION\"", network)
-        access_approval = '${{ github.event_name == \'workflow_dispatch\' && inputs.approve_eks_state_reconciliation && \'true\' || \'false\' }}'
-        self.assertIn(f'--allow-imports "{access_approval}"', access)
+        self.assertIn('--allow-imports "$ALLOW_EKS_STATE_RECONCILIATION"', access)
         self.assertNotIn("vars.ALLOW_EKS_STATE_RECONCILIATION", access)
         for output in ("infra/eks-network-imports.auto.tf", "infra/eks-access-imports.auto.tf"):
             self.assertIn(output, plan)
             self.assertIn(output, apply_imports)
-        self.assertIn(f'--allow-imports "{access_approval}"', apply_imports)
+        self.assertIn('--allow-imports "$ALLOW_EKS_STATE_RECONCILIATION"', apply_imports)
 
     def test_eks_feature_branches_run_validation_without_plan_or_apply(self):
         workflow = (ROOT / ".github/workflows/pipeline.yml").read_text(encoding="utf-8")
