@@ -1,18 +1,12 @@
 name: Pipeline
 
 on:
-  push:
-    branches: [develop, main, 'feature/**']
-    paths-ignore:
-      - .github/workflows/pipeline.yml
-  pull_request:
-    types: [opened, synchronize, reopened]
-    branches: [develop, main]
   workflow_dispatch:
     inputs:
       apply:
         description: Aplicar o plan de VPC/EKS após aprovação
         type: boolean
+        required: true
         default: false
       approve_state_bucket_creation:
         description: Executar somente o job isolado de bootstrap; autoriza criação apenas se o bucket estiver ausente
@@ -39,7 +33,7 @@ concurrency:
 jobs:
   validate:
     name: CI Terraform de VPC/EKS
-    if: github.event_name != 'workflow_dispatch' || inputs.approve_state_bucket_creation != true
+    if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && (github.ref != 'refs/heads/main' || github.ref_protected) && inputs.approve_state_bucket_creation != true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -52,6 +46,7 @@ jobs:
       - run: python -m unittest discover -s scripts -p "test_bootstrap_workflow_isolation.py" -v
       - run: python -m unittest discover -s scripts -p "test_github_environment_guards.py" -v
       - run: python -m unittest discover -s scripts -p "test_eks_endpoint_access.py" -v
+      - run: python -m unittest discover -s scripts -p "test_ci_cd_workflow_matrix.py" -v
       - run: python -m unittest discover -s scripts -p "test_prepare_eks_access_imports.py" -v
       - run: python -m unittest discover -s scripts -p "test_prepare_eks_network_imports.py" -v
       - run: python -m unittest discover -s scripts -p "test_state_resource_guard.py" -v
@@ -108,7 +103,7 @@ jobs:
 
   plan:
     name: Terraform Plan protegido
-    if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.approve_state_bucket_creation != true)) && (github.ref != 'refs/heads/main' || github.ref_protected)
+    if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'workflow_dispatch' && inputs.approve_state_bucket_creation != true && (github.ref != 'refs/heads/main' || github.ref_protected)
     needs: validate
     runs-on: ubuntu-latest
     environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
@@ -152,8 +147,7 @@ jobs:
             --secret AWS_SECRET_ACCESS_KEY \
             --secret AWS_SESSION_TOKEN \
             --secret TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE \
-            --state-key AWS_TF_STATE_KEY_INFRA \
-            --approval-gate
+            --state-key AWS_TF_STATE_KEY_INFRA
       - name: Registrar fingerprint do Environment e dos recursos VPC/EKS
         run: python scripts/terraform_deployment_fingerprint.py vpc-eks create infra/infra-deployment-config.sha256
       - uses: aws-actions/configure-aws-credentials@v4
@@ -287,7 +281,7 @@ jobs:
 
   apply:
     name: Terraform Apply protegido por environment
-    if: (((github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'push') || ((github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'workflow_dispatch' && inputs.apply && inputs.approve_state_bucket_creation != true)) && (github.ref != 'refs/heads/main' || github.ref_protected)
+    if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'workflow_dispatch' && inputs.apply == true && inputs.approve_state_bucket_creation != true && (github.ref != 'refs/heads/main' || github.ref_protected)
     needs: plan
     runs-on: ubuntu-latest
     environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}

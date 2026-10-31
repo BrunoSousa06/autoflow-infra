@@ -1,17 +1,11 @@
 name: Migração HTTP API
 
 on:
-  pull_request:
-    branches: [develop, main]
-    paths: ["infra/api-gateway/**", "scripts/*gateway*", "scripts/test_terraform_backend_config.py", ".github/workflows/api-gateway.yml"]
-  push:
-    branches: [develop, main, 'feature/**']
-    paths: ["infra/api-gateway/**", "scripts/*gateway*"]
   workflow_dispatch:
     inputs:
       apply:
         description: Aplicar o plano após aprovação do Environment selecionado
-        required: false
+        required: true
         type: boolean
         default: false
       allow_destructive:
@@ -36,6 +30,7 @@ concurrency:
 jobs:
   validate:
     name: CI API Gateway
+    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -52,6 +47,7 @@ jobs:
       - name: Testar imports do VPC Link sem State
         run: python -m unittest discover -s scripts -p test_prepare_gateway_imports.py -v
       - run: python -m unittest discover -s scripts -p test_github_environment_guards.py -v
+      - run: python -m unittest discover -s scripts -p test_ci_cd_workflow_matrix.py -v
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.16.5"
@@ -66,7 +62,7 @@ jobs:
 
   plan:
     name: Terraform Plan por ambiente
-    if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref != 'refs/heads/main' || github.ref_protected)
+    if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'workflow_dispatch' && (github.ref != 'refs/heads/main' || github.ref_protected)
     needs: validate
     runs-on: ubuntu-latest
     outputs:
@@ -93,6 +89,7 @@ jobs:
       EKS_PROJECT_NAME: ${{ github.ref == 'refs/heads/main' && 'autoflow-production' || 'autoflow' }}
       EKS_CLUSTER_NAME: eks-${{ github.ref == 'refs/heads/main' && 'autoflow-production' || 'autoflow' }}
       EKS_NODEGROUP_NAME: nodeg-${{ github.ref == 'refs/heads/main' && 'autoflow-production' || 'autoflow' }}
+      PLAN_ENCRYPTION_PASSPHRASE: ${{ secrets.TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -104,6 +101,7 @@ jobs:
           AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
           API_GATEWAY_CORS_ORIGINS: ${{ vars.API_GATEWAY_CORS_ORIGINS }}
           TERRAFORM_APPLY_APPROVAL_CONFIGURED: ${{ vars.TERRAFORM_APPLY_APPROVAL_CONFIGURED }}
+          TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE: ${{ secrets.TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE }}
         shell: bash
         run: |
           set -euo pipefail
@@ -117,10 +115,10 @@ jobs:
             --secret AWS_ACCESS_KEY_ID \
             --secret AWS_SECRET_ACCESS_KEY \
             --secret AWS_SESSION_TOKEN \
+            --secret TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE \
             --state-key AWS_TF_STATE_KEY_GATEWAY \
             --state-key AWS_TF_STATE_KEY_INFRA \
-            --state-key AWS_TF_STATE_KEY_NEWRELIC \
-            --approval-gate
+            --state-key AWS_TF_STATE_KEY_NEWRELIC
           python -c 'import json,os,sys; value=json.loads(os.environ["API_GATEWAY_CORS_ORIGINS"]); sys.exit(not isinstance(value,list))'
       - name: Registrar fingerprint do Environment, backend e recursos do Gateway
         run: python scripts/terraform_deployment_fingerprint.py api-gateway create infra/api-gateway/gateway-deployment-config.sha256
@@ -174,22 +172,22 @@ jobs:
         env:
           ALLOW_DESTRUCTIVE: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_destructive && 'true' || 'false' }}
         run: |
+          umask 077
           terraform plan -input=false -out=gateway.tfplan
           ALLOW_DESTRUCTIVE="$ALLOW_DESTRUCTIVE" python ../../scripts/review_gateway_plan.py gateway.tfplan
-          if [[ "$GITHUB_REF" == refs/heads/develop || "$GITHUB_REF" == refs/heads/main ]]; then
-            printf '%s\n' "$GITHUB_SHA" > gateway.tfplan.commit
-            python -c 'import json,os; json.dump({"run_id":os.environ["GITHUB_RUN_ID"],"run_attempt":os.environ["GITHUB_RUN_ATTEMPT"],"commit":os.environ["GITHUB_SHA"]}, open("gateway.tfplan.metadata.json", "w", encoding="utf-8"), sort_keys=True)'
-            sha256sum gateway.tfplan .terraform.lock.hcl gateway.tfplan.commit gateway.tfplan.metadata.json gateway-deployment-config.sha256 > gateway.tfplan.sha256
-          else
-            rm -f gateway.tfplan
-          fi
+          test -n "$PLAN_ENCRYPTION_PASSPHRASE"
+          printf '%s\n' "$PLAN_ENCRYPTION_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --symmetric --cipher-algo AES256 --output gateway.tfplan.gpg gateway.tfplan
+          printf '%s\n' "$GITHUB_SHA" > gateway.tfplan.commit
+          python -c 'import json,os; json.dump({"run_id":os.environ["GITHUB_RUN_ID"],"run_attempt":os.environ["GITHUB_RUN_ATTEMPT"],"commit":os.environ["GITHUB_SHA"]}, open("gateway.tfplan.metadata.json", "w", encoding="utf-8"), sort_keys=True)'
+          sha256sum gateway.tfplan.gpg .terraform.lock.hcl gateway.tfplan.commit gateway.tfplan.metadata.json gateway-deployment-config.sha256 > gateway.tfplan.sha256
+          rm -f gateway.tfplan
       - name: Publicar plano confidencial e imutável
         if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
           name: gateway-tfplan-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
           path: |
-            infra/api-gateway/gateway.tfplan
+            infra/api-gateway/gateway.tfplan.gpg
             infra/api-gateway/gateway.tfplan.sha256
             infra/api-gateway/gateway.tfplan.commit
             infra/api-gateway/gateway.tfplan.metadata.json
@@ -200,7 +198,7 @@ jobs:
 
   apply:
     name: Terraform Apply por ambiente (aprovação requerida)
-    if: ((github.ref == 'refs/heads/develop' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.apply))) || (github.ref == 'refs/heads/main' && ((github.event_name == 'push' && needs.plan.outputs.initialized == 'true') || (github.event_name == 'workflow_dispatch' && inputs.apply)))) && (github.ref != 'refs/heads/main' || github.ref_protected)
+    if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'workflow_dispatch' && inputs.apply == true && (github.ref != 'refs/heads/main' || github.ref_protected)
     needs: plan
     runs-on: ubuntu-latest
     environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
@@ -220,6 +218,7 @@ jobs:
       EKS_PROJECT_NAME: ${{ github.ref == 'refs/heads/main' && 'autoflow-production' || 'autoflow' }}
       EKS_CLUSTER_NAME: eks-${{ github.ref == 'refs/heads/main' && 'autoflow-production' || 'autoflow' }}
       EKS_NODEGROUP_NAME: nodeg-${{ github.ref == 'refs/heads/main' && 'autoflow-production' || 'autoflow' }}
+      PLAN_ENCRYPTION_PASSPHRASE: ${{ secrets.TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -234,6 +233,7 @@ jobs:
           AWS_TF_STATE_KEY_INFRA: ${{ vars.AWS_TF_STATE_KEY_INFRA }}
           AWS_TF_STATE_KEY_NEWRELIC: ${{ vars.AWS_TF_STATE_KEY_NEWRELIC }}
           API_GATEWAY_CORS_ORIGINS: ${{ vars.API_GATEWAY_CORS_ORIGINS }}
+          TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE: ${{ secrets.TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
@@ -249,6 +249,7 @@ jobs:
             --secret AWS_ACCESS_KEY_ID \
             --secret AWS_SECRET_ACCESS_KEY \
             --secret AWS_SESSION_TOKEN \
+            --secret TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE \
             --state-key AWS_TF_STATE_KEY_GATEWAY \
             --state-key AWS_TF_STATE_KEY_INFRA \
             --state-key AWS_TF_STATE_KEY_NEWRELIC \
@@ -289,6 +290,15 @@ jobs:
           python -c 'import json,os,sys; m=json.load(open("gateway.tfplan.metadata.json", encoding="utf-8")); sys.exit(not (m == {"run_id":os.environ["GITHUB_RUN_ID"],"run_attempt":os.environ["GITHUB_RUN_ATTEMPT"],"commit":os.environ["GITHUB_SHA"]}))'
           sha256sum --check gateway.tfplan.sha256
           python ../../scripts/terraform_deployment_fingerprint.py api-gateway verify gateway-deployment-config.sha256
+      - name: Descriptografar o plan aprovado desta execução
+        working-directory: infra/api-gateway
+        env:
+          PLAN_ENCRYPTION_PASSPHRASE: ${{ secrets.TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$PLAN_ENCRYPTION_PASSPHRASE"
+          printf '%s\n' "$PLAN_ENCRYPTION_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --decrypt --output gateway.tfplan gateway.tfplan.gpg
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}

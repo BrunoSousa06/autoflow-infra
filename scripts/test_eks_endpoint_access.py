@@ -307,13 +307,13 @@ class EndpointAccessTests(unittest.TestCase):
         self.assertIn("scripts/validate_github_environment.py", apply)
         self.assertIn("--approval-gate", apply)
 
-    def test_develop_push_plans_and_applies_only_after_environment_approval(self):
+    def test_manual_plan_and_apply_require_explicit_authorization_and_environment_approval(self):
         from pathlib import Path
         workflow = Path(__file__).parents[1] / ".github/workflows/pipeline.yml"
         content = workflow.read_text(encoding="utf-8")
         plan = content.split("  plan:", 1)[1].split("  apply:", 1)[0]
         apply = content.split("\n  apply:\n", 1)[1]
-        self.assertIn("github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.approve_state_bucket_creation != true)", plan)
+        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.approve_state_bucket_creation != true", plan)
         self.assertIn("default: false", content.split("approve_state_bucket_creation:", 1)[1].split("permissions:", 1)[0])
         self.assertIn("default: false", content.split("approve_eks_state_reconciliation:", 1)[1].split("allow_destructive:", 1)[0])
         self.assertIn("description: Autorizar exclusões/substituições após revisar o plan", content)
@@ -335,9 +335,10 @@ class EndpointAccessTests(unittest.TestCase):
         self.assertIn("if: steps.eks_preflight.outputs.exists == 'true'", apply_authorize)
         self.assertIn("steps.authorize_eks.outcome != 'skipped'", plan)
         self.assertIn("steps.authorize_eks.outcome != 'skipped'", apply)
-        self.assertIn("github.event_name == 'push'", apply)
-        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.apply", apply)
-        self.assertIn("(((github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'push') || ((github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'workflow_dispatch' && inputs.apply && inputs.approve_state_bucket_creation != true))", apply)
+        self.assertNotIn("github.event_name == 'push'", plan + apply)
+        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.apply == true", apply)
+        self.assertIn("inputs.approve_state_bucket_creation != true", apply)
+        self.assertNotIn("--approval-gate", plan)
         selected_environment = "environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}"
         self.assertIn(selected_environment, apply)
         self.assertIn("python scripts/verify_aws_account.py", plan)
