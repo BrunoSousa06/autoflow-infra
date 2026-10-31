@@ -1,8 +1,7 @@
 # Arquitetura final: AutoFlow com Amazon API Gateway
 
-**Status:** arquitetura e pipelines declaradas no código deste checkout. Esta documentação e os testes locais não comprovam recursos implantados nem configuração efetiva na AWS; após reset do AWS Academy Learner Lab, a implantação precisa ser executada e verificada operacionalmente.
-
-Esta página consolida a arquitetura e os diagramas C4. A decisão arquitetural está registrada em [ADR-001](adr-001-api-gateway.md) e os detalhes de desenho/implantação em [RFC técnica](rfc-api-gateway.md).
+Esta página descreve a arquitetura gerenciada pelos roots Terraform e os fluxos implementados nos quatro repositórios.
+As decisões estão em [ADR-001](adr-001-api-gateway.md); os detalhes técnicos, na [RFC](rfc-api-gateway.md).
 
 ## Decisão
 
@@ -11,7 +10,6 @@ Esta página consolida a arquitetura e os diagramas C4. A decisão arquitetural 
 3. Rotas de negócio e frontend usam integração `HTTP_PROXY` pelo VPC Link v2 para listeners de um ALB interno.
 4. O ALB encaminha aos NodePorts `30081` (Spring Boot) e `30080` (Nginx/Angular), que seguem para Services e Pods do EKS.
 5. Lambda e backend acessam o RDS PostgreSQL privado. O JWT HS256 emitido pela Lambda é validado pelo backend; perfis e estado do cliente são verificados no domínio.
-6. A Function URL não faz parte do caminho de tráfego configurado. A integração nativa da HTTP API invoca a Lambda com permissão restrita à rota de login.
 
 ## C4 — contexto
 
@@ -76,7 +74,7 @@ flowchart LR
   SYNTH -.->|verificação da URL configurada| API
 ```
 
-O contrato atualmente documentado pela Lambda usa `cpf_cnpj` e `senha`. O diagrama não implica que o API Gateway valide JWT: a validação e autorização de domínio das rotas protegidas são feitas pelo backend Spring Boot. New Relic, integração Kubernetes, APM, dashboards, alertas e Synthetic estão declarados para provisionamento pelos roots Terraform correspondentes. Após reset do Learner Lab, siga a ordem do [runbook de primeiro provisionamento](../eks-primeiro-provisionamento.md), que começa pelo bootstrap S3 isolado.
+O contrato da Lambda usa `cpf_cnpj` e `senha`. O diagrama não implica que o API Gateway valide JWT: a validação e autorização das rotas protegidas são feitas pelo backend Spring Boot. O APM Java é configurado na aplicação; o root `infra/newrelic` gerencia a integração Kubernetes, dashboards, alertas e Synthetic conforme as Variables do Environment. A ordem de provisionamento está no [runbook](../eks-primeiro-provisionamento.md).
 
 ## Sequências de comunicação
 
@@ -167,7 +165,7 @@ flowchart TB
   DbSG -.-> RDS
 ```
 
-Terraform declara três subnets públicas e três privadas distribuídas em três AZs; ALB interno, VPC Link, EKS e RDS usam subnets privadas conforme seus roots. O SG do ALB permite o SG do VPC Link nos listeners 8080/8081 e saída ao SG dos nodes nas portas 30080/30081; os NodePorts aceitam tráfego somente do SG do ALB. O SG do RDS permite PostgreSQL às origens configuradas no root do banco. O tráfego privado VPC Link–ALB usa HTTP; TLS termina no endpoint gerenciado do API Gateway. Para implantação após reset, configure e valide os Environments, faça bootstrap do bucket em job separado e siga o [runbook](runbook.md); o diagrama registra configuração versionada, não estado AWS observado.
+Terraform declara três subnets públicas e três privadas distribuídas em três AZs; ALB interno, VPC Link, EKS e RDS usam subnets privadas conforme seus roots. O SG do ALB permite o SG do VPC Link nos listeners 8080/8081 e saída ao SG dos nodes nas portas 30080/30081; os NodePorts aceitam tráfego somente do SG do ALB. O SG do RDS permite PostgreSQL às origens configuradas no root do banco. O tráfego privado VPC Link–ALB usa HTTP; TLS termina no endpoint gerenciado do API Gateway. O [runbook](runbook.md) descreve os passos de provisionamento e validação.
 
 ## Rotas e autorização
 
@@ -180,13 +178,13 @@ O frontend chama `/auth/login` e as rotas de negócio no mesmo host. `cors_origi
 | Root proprietário | Responsabilidade final | Variable da State Key no repositório proprietário | Isolamento observado |
 |---|---|---|---|
 | VPC/EKS (`autoflow-infra/infra`) | VPC, EKS e node group | `AWS_TF_STATE_KEY_INFRA` | O workflow deste repositório exige o prefixo do Environment selecionado. |
-| Aplicação (`autoflow/infra`) | Deployments, Services, NodePorts e ConfigMaps | `AWS_TF_STATE_KEY` | O workflow do checkout consultado consome a Variable; a validação da matriz de seis roots é separada e não é disparada automaticamente por este repositório. |
-| RDS (`autoflow-db/infra`) | RDS PostgreSQL e rede do banco | `AWS_TF_STATE_KEY` | O workflow do checkout consultado consome a Variable; a validação da matriz de seis roots é separada e não é disparada automaticamente por este repositório. |
-| Lambda (`autoflow-lambda/infra`) | Função Lambda e configuração de execução; a invocação é integrada à HTTP API, sem Function URL no caminho declarado | `AWS_TF_STATE_KEY` | O workflow lê a key do Environment selecionado, exige o prefixo do ambiente e valida a separação em relação às keys de VPC/EKS e RDS. O sufixo é externo. |
+| Aplicação (`autoflow/infra`) | Deployments, Services, NodePorts e ConfigMaps | `AWS_TF_STATE_KEY` | O workflow da aplicação consome a Variable; a validação da matriz entre seis roots tem um comando local próprio. |
+| RDS (`autoflow-db/infra`) | RDS PostgreSQL e rede do banco | `AWS_TF_STATE_KEY` | O workflow de RDS consome a Variable; a validação da matriz entre seis roots tem um comando local próprio. |
+| Lambda (`autoflow-lambda/infra`) | Função Lambda e configuração de execução; a API Gateway HTTP API integra a rota de login | `AWS_TF_STATE_KEY` | O workflow lê a key do Environment selecionado, exige o prefixo do ambiente e valida a separação em relação às keys de VPC/EKS e RDS. O sufixo é externo. |
 | API Gateway (`autoflow-infra/infra/api-gateway`) | HTTP API, rotas, integração nativa Lambda, VPC Link, ALB, Target Groups e observabilidade | `AWS_TF_STATE_KEY_GATEWAY` | O workflow deste repositório exige o prefixo do Environment e distingue a key de VPC/EKS e New Relic. |
 | New Relic (`autoflow-infra/infra/newrelic`) | Release Helm, dashboards, alertas e Synthetic | `AWS_TF_STATE_KEY_NEWRELIC` | O workflow deste repositório exige o prefixo do Environment e distingue a key de VPC/EKS. |
 
-Para cada Environment, a matriz lógica contém seis keys diferentes: cada key deve começar por `homolog/` ou `production/`, ter sufixo fornecido externamente e não ser compartilhada entre roots. Os consumidores recebem a key exata do root produtor. `terraform_state_contract.py` valida esses invariantes quando recebe a matriz JSON externa; a validação não acessa AWS e não é automaticamente chamada pelo `Pipeline` deste repositório. As configurações de produção e a implantação dos seis roots nos outros repositórios não são comprovadas por este checkout. Conta, bucket, região e sufixos efetivos devem vir dos respectivos GitHub Environments; não há valores reais versionados aqui.
+Para cada Environment, a matriz contém seis keys diferentes, prefixadas por `homolog/` ou `production/`, com sufixos fornecidos externamente. Os consumidores recebem a key exata do root produtor. `terraform_state_contract.py` valida a matriz JSON externa sem acessar AWS; consulte o [runbook de primeiro provisionamento](../eks-primeiro-provisionamento.md) para o procedimento e os valores fornecidos pelos GitHub Environments.
 
 Os states permanecem separados. Nenhum state deve ser editado diretamente ou compartilhado entre contas.
 
@@ -194,5 +192,4 @@ Os states permanecem separados. Nenhum state deve ser editado diretamente ou com
 
 O bootstrap do bucket, a validação dos seis States, os gates de Plan/Apply e a ordem de implantação estão descritos no
 [runbook do API Gateway](runbook.md), no [runbook de primeiro provisionamento EKS](../eks-primeiro-provisionamento.md)
-e no [procedimento de bootstrap S3](../state-bucket-bootstrap.md). Esses documentos descrevem procedimentos e
-configuração versionada; não confirmam a execução de Apply nem o estado atual dos recursos AWS.
+e no [procedimento de bootstrap S3](../state-bucket-bootstrap.md).

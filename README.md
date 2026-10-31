@@ -1,8 +1,7 @@
 # Infraestrutura do AutoFlow
 
-Este repositório declara em Terraform a plataforma AWS do AutoFlow: rede, EKS, API Gateway HTTP API v2 e integração
-New Relic. O gateway encaminha o login à Lambda e o tráfego da aplicação a um ALB interno no EKS. Não há Kong nem
-Lambda Function URL na arquitetura ativa.
+Este repositório declara em Terraform a rede e o EKS do AutoFlow, a API Gateway HTTP API v2 e a integração New Relic. O
+gateway encaminha o login à Lambda e o tráfego da aplicação a um ALB interno no EKS.
 
 ## Responsabilidade e arquitetura
 
@@ -38,20 +37,17 @@ e [runbooks](docs/api-gateway/runbook.md).
 - `ci.yml` valida os roots, testes e guardrails em Pull Requests para `develop`/`main` e pushes para essas branches e
   `feature/**`. A CI não usa credenciais AWS nem executa Plan/Apply.
 - Os workflows `Pipeline`, `Migração HTTP API` e `New Relic Pipeline` também recebem `push` em `develop`/`main`.
-  O gate espera sucesso da CI do mesmo repositório, branch e SHA. Na leitura somente-leitura do GitHub em 31/10/2026,
-  `AUTO_CD_ENABLED` estava ausente nos Environments `homolog` e `production`; portanto, o caminho automático estava
-  desabilitado. As últimas execuções automáticas de VPC/EKS, API Gateway e New Relic falharam no gate de origem; nenhum
-  Plan desses pushes foi iniciado ([VPC/EKS](https://github.com/autoflow-fiap/autoflow-infra/actions/runs/41160245014),
-  [API Gateway](https://github.com/autoflow-fiap/autoflow-infra/actions/runs/41160245051), [New Relic](https://github.com/autoflow-fiap/autoflow-infra/actions/runs/41160245013)).
-- Apply não é automático: requer `workflow_dispatch` com `apply=true`, gates do Environment e aprovação aplicável.
-  `TERRAFORM_APPLY_APPROVAL_CONFIGURED` estava `false` nos dois Environments, bloqueando Apply. Os Environments tinham
-  Required reviewers e políticas de branch (`develop`/`main`); regrasets ativos exigiam Pull Request e checks para ambas
-  as branches. A criação/verificação inicial do bucket é um dispatch isolado documentado em [state-bucket-bootstrap.md](docs/state-bucket-bootstrap.md).
-- `pr-automatico.yaml` abre Pull Request de `main` para `develop`. A proteção efetiva de branches e a presença de
-  Required reviewers foram verificadas somente-leitura no GitHub em 31/10/2026.
+- O gate valida a CI do mesmo repositório, branch e SHA. `AUTO_CD_ENABLED=true` no Environment selecionado habilita o
+  caminho automático, que executa Plan, não Apply.
+- Apply requer `workflow_dispatch` com `apply=true` e `TERRAFORM_APPLY_APPROVAL_CONFIGURED=true`; os jobs usam o
+  Environment selecionado. Configure Required reviewers e restrições de branch nos Environments; `main` exige proteção
+  de branch.
+- O bootstrap do bucket é um dispatch isolado documentado em [state-bucket-bootstrap.md](docs/state-bucket-bootstrap.md).
+- `pr-automatico.yaml` solicita Pull Request de `main` para `develop` em pushes para `main`.
+- Configure proteção de branch em `develop` e `main` para exigir Pull Request e checks de CI.
 
-A CI/CD está implementada no código; sua ativação depende da configuração externa. Plan e CI não comprovam implantação.
-Consulte [início automático do CD](docs/ci-cd-automatico.md) e o [catálogo de Variables e Secrets](docs/variables-and-secrets.md).
+CI e Terraform Plan validam código e mudanças propostas; somente Apply provisiona ou atualiza recursos AWS. Consulte
+[início automático do CD](docs/ci-cd-automatico.md) e o [catálogo de Variables e Secrets](docs/variables-and-secrets.md).
 
 ## Ordem de provisionamento
 
@@ -67,21 +63,20 @@ Para cada ambiente, respeite as dependências nesta ordem:
 O provisionamento é separado por repositório e não é orquestrado automaticamente. Use o [runbook de primeiro provisionamento](docs/eks-primeiro-provisionamento.md)
 e não inicialize State vazio sobre recursos existentes.
 
-Para operação e recuperação, consulte também o [bootstrap do bucket](docs/state-bucket-bootstrap.md), o [diagnóstico de nós EKS](docs/eks-node-recovery.md),
-a [migração controlada do State New Relic](docs/newrelic-state-migration.md) e a documentação do [runner privado](docs/github-runner.md).
+Para operação, consulte o [bootstrap do bucket](docs/state-bucket-bootstrap.md), o [runbook de manutenção dos nós EKS](docs/eks-node-recovery.md)
+e a [configuração dos runners GitHub-hosted](docs/github-runner.md).
 
 ## Terraform State e observabilidade
 
 Os seis roots mantêm States S3 separados por root e Environment: VPC/EKS, RDS, Lambda, API Gateway, aplicação e New Relic.
 As keys são fornecidas pelos GitHub Environments e devem permanecer distintas; dependências e validações estão na [tabela de ownership](docs/api-gateway/arquitetura.md#states-e-ownership).
 
-A aplicação declara o agente APM Java, logs JSON correlacionados e eventos de negócio; `infra/newrelic/` pode provisionar,
-conforme Variables do Environment, monitoramento Kubernetes/Fluent Bit, dashboards e condições de alerta para CPU/memória,
-latência, disponibilidade e eventos de OS. Synthetic exige URL e locations configuradas. O código não comprova ingestão,
-dashboards, alertas ou recursos atualmente ativos. Em 31/10/2026, as flags Kubernetes/recursos New Relic estavam `true`
-em `homolog` e ausentes em `production`; isso não comprova Apply ou ingestão. Detalhes em [`infra/newrelic/README.md`](infra/newrelic/README.md).
+A aplicação configura o agente APM Java, logs JSON correlacionados e eventos de negócio. `infra/newrelic/` provisiona,
+quando habilitado por Environment, monitoramento Kubernetes/Fluent Bit, dashboards e condições de alerta para CPU/memória,
+latência, disponibilidade e eventos de OS. Synthetic requer URL e locations. O root de API Gateway configura logs e
+alarmes CloudWatch; seus destinos SNS são opcionais. Consulte [`infra/newrelic/README.md`](infra/newrelic/README.md).
 
-## Validação local e evidência
+## Validar localmente
 
 Valide o root VPC/EKS sem backend remoto e sem acesso à AWS:
 
@@ -90,11 +85,5 @@ terraform -chdir=infra init -backend=false -input=false
 terraform -chdir=infra validate
 ```
 
-Os outros roots têm seus próprios comandos e pré-requisitos documentados nos respectivos READMEs. Não execute Plan, Apply
-ou Destroy como validação local.
-
-| Estado | Evidência observada em `develop` |
-|---|---|
-| **Implementado** | Terraform dos roots VPC/EKS, API Gateway e New Relic; CI e gates de CD versionados. |
-| **Validado** | A [execução 41163573967](https://github.com/autoflow-fiap/autoflow-infra/actions/runs/41163573967) validou VPC/EKS e Plan com 23 criações, 0 alterações e 0 destruições; publicou artifact criptografado. |
-| **Implantado** | Não comprovado. O Apply da execução 41163573967 não foi executado; nenhum endpoint ativo é confirmado. |
+Os outros roots têm seus próprios comandos e pré-requisitos documentados nos respectivos READMEs. O Plan apresenta as
+mudanças propostas; Apply é a operação que provisiona ou atualiza recursos e deve ser executado pelos gates do Environment.

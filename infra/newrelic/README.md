@@ -4,27 +4,21 @@ Este root gerencia exclusivamente `helm_release.newrelic_kubernetes`, dashboards
 
 ## Recursos de observabilidade declarados
 
-- `ENABLE_NEWRELIC_KUBERNETES=true` habilita o chart `nri-bundle`, incluindo coleta Kubernetes e Fluent Bit para logs do
-  namespace configurado. A aplicação instala o agente APM Java e emite eventos de OS e falhas de integração.
-- `ENABLE_NEWRELIC_ACCOUNT_RESOURCES=true` declara dashboard privado e condições NRQL para OS criadas/dia, duração por
-  etapa, latência APM, CPU/memória, falhas de processamento e integrações. Synthetic exige URL e locations fornecidas em
-  conjunto; quando habilitado, o monitor é configurado para executar a cada cinco minutos.
-- O dashboard e as condições só são criados quando a flag de recursos de conta está ativa. Consultas opcionais controlam
-  widgets/alertas de disponibilidade, CPU e memória. O código não comprova que as flags estejam ativas ou que os recursos
-  estejam implantados.
-- O filtro dos widgets APM no dashboard usa `environment`, enquanto as condições APM usam `tags.environment`. A
-  compatibilidade desses atributos não foi verificada no New Relic. Este root também não declara destino/workflow de
-  notificação; no root API Gateway, `alarm_actions` é vazio por padrão.
+`ENABLE_NEWRELIC_KUBERNETES` (default `false`) habilita o chart `nri-bundle`, incluindo coleta Kubernetes e Fluent Bit
+para logs do namespace configurado. A aplicação configura o agente APM Java e emite eventos de OS e integração.
 
-Na consulta somente-leitura ao GitHub em 31/10/2026, as flags `ENABLE_NEWRELIC_KUBERNETES` e
-`ENABLE_NEWRELIC_ACCOUNT_RESOURCES` estavam `true` em `homolog` e ausentes em `production`. Isso descreve a configuração
-dos Environments, não comprova Apply, ingestão ou recursos ativos. A variável `ENABLE_NEWRELIC_APM` da aplicação estava
-`true` nos dois Environments.
+`ENABLE_NEWRELIC_ACCOUNT_RESOURCES` (default `false`) habilita o dashboard privado e as condições NRQL para OS criadas/dia,
+duração por etapa, latência APM, CPU/memória, falhas de processamento e integrações. Consultas opcionais definem widgets
+e alertas de disponibilidade, CPU e memória. Synthetic requer URL e locations; o monitor é configurado para executar a
+cada cinco minutos. Os recursos são provisionados pelo Apply do root.
 
-Os eventos `AutoFlowOrderCreated`, `AutoFlowOrderStageCompleted`, `AutoFlowOrderProcessingFailure` e
-`AutoFlowIntegrationFailure` são emitidos pela aplicação e carregam o atributo `environment`. Logs JSON incluem
-`request.id` e, quando disponíveis, `trace.id`/`span.id`. Configuração versionada e testes não comprovam ingestão, abertura
-de incidentes, entrega de notificações ou execução de Synthetic.
+Os widgets APM do dashboard filtram `environment`; as condições APM filtram `tags.environment`. Ajuste as consultas de
+acordo com os atributos emitidos pelo agente. Este root não declara workflow/destino de notificação; no root API Gateway,
+`alarm_actions` é vazio por padrão.
+
+A aplicação emite `AutoFlowOrderCreated`, `AutoFlowOrderStageCompleted`, `AutoFlowOrderProcessingFailure` e
+`AutoFlowIntegrationFailure`, todos com o atributo `environment`. Os logs JSON incluem `request.id` e, quando disponíveis,
+`trace.id`/`span.id`.
 
 ## State e providers
 
@@ -43,6 +37,12 @@ O inventário remoto pagina dashboards via NerdGraph e alertas, condições NRQL
 
 ## Execução
 
-O workflow `.github/workflows/ci.yml` valida automaticamente New Relic em PRs para `develop`/`main` e pushes para `develop`, `main` e `feature/**`, sem acesso AWS. `New Relic Pipeline` recebe `push` para `develop`/`main` e `workflow_dispatch`. O caminho automático espera sucesso da CI para o mesmo SHA e só libera Plan quando `AUTO_CD_ENABLED=true` no Environment; a Variable estava ausente em `homolog` e `production` na consulta somente-leitura de 31/10/2026, então o caminho estava desabilitado. `develop` seleciona `homolog`; `main`, `production`. O caminho automático não executa Apply. Apply requer dispatch com `apply=true`, aprovação do Environment selecionado e `TERRAFORM_APPLY_APPROVAL_CONFIGURED=true`; essa Variable estava `false` nos dois Environments e bloqueava Apply. Regrasets de branch, Required reviewers e políticas `develop`/`main` estavam ativos na mesma consulta. O Plan é criptografado e publicado em artifact vinculado ao commit. `approve_reconciliation` só pode ser habilitado por dispatch e gera imports declarativos incluídos no Plan; scripts não alteram State. Exclusões e substituições continuam sujeitas aos guards existentes e à aprovação explícita.
+O workflow `.github/workflows/ci.yml` valida o root em Pull Requests para `develop`/`main` e pushes para `develop`, `main`
+e `feature/**`, sem acesso AWS. `New Relic Pipeline` recebe `push` em `develop`/`main` e `workflow_dispatch`; o caminho
+automático exige `AUTO_CD_ENABLED=true` e CI bem-sucedida para o mesmo SHA e executa somente Plan. Apply exige dispatch
+com `apply=true` e `TERRAFORM_APPLY_APPROVAL_CONFIGURED=true`; o job usa o Environment selecionado. Configure Required
+reviewers e restrições de branch para proteger o deployment. O Plan é criptografado e publicado em artifact vinculado ao
+commit. `approve_reconciliation` gera imports declarativos incluídos no Plan; scripts não alteram State. Exclusões e
+substituições exigem autorização e revisão do Plan.
 
 Antes do primeiro uso, confirmar conta, ambiente e ownership. A pipeline bloqueia State legado, ownership duplicado, identidade ambígua, respostas incompletas e inventário inconclusivo. Divergência exige `workflow_dispatch` com `approve_reconciliation=true` e revisão do Plan; imports são declarativos e incluídos no mesmo Plan aprovado. A reconciliação não executa `state rm`, `state mv`, importação fora do Terraform ou Apply automático.

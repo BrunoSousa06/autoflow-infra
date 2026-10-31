@@ -2,14 +2,15 @@
 
 Gateway de entrada definitivo do AutoFlow: HTTP API v2, integração nativa Lambda, VPC Link v2 e ALB **interno** para backend e frontend no EKS.
 
-O root declara HTTP API, VPC Link e ALB interno. Após reset do Learner Lab, configure os GitHub Environments, valide as State Keys, execute o bootstrap S3 isolado quando necessário e só então use a pipeline Migração HTTP API depois das dependências. Essas declarações não comprovam recursos atualmente implantados.
+O root declara HTTP API, VPC Link e ALB interno. A pipeline `Migração HTTP API` consome os GitHub Environments e os
+States de VPC/EKS; o bootstrap S3 isolado deve ser executado quando o bucket ainda não existir.
 
 Os documentos ficam em `autoflow-infra/docs/api-gateway/`, a partir da raiz do repositório:
 
 - [Arquitetura e diagramas C4](../../docs/api-gateway/arquitetura.md)
-- [ADR-001 — substituição Kong → API Gateway](../../docs/api-gateway/adr-001-api-gateway.md)
+- [ADR-001 — API Gateway HTTP API v2](../../docs/api-gateway/adr-001-api-gateway.md)
 - [RFC técnica](../../docs/api-gateway/rfc-api-gateway.md)
-- [Runbook: Learner Lab, implantação, smoke, recuperação e rollback](../../docs/api-gateway/runbook.md)
+- [Runbook de implantação, validação e recuperação](../../docs/api-gateway/runbook.md)
 
 ## Uso local
 
@@ -35,7 +36,8 @@ integração; não registra IP, query, body ou headers. O log group retém event
 respostas 5xx e ausência de targets saudáveis no ALB. `alarm_actions` é vazio por padrão, portanto não declara destino de
 notificação; métricas detalhadas por rota também ficam desativadas por padrão e exigem habilitação externa.
 
-O dashboard opcional de API Gateway no New Relic recebe consultas NRQL por Environment. Esses arquivos declaram recursos,
-mas não comprovam que estejam habilitados, implantados ou emitindo dados.
+O dashboard opcional de API Gateway no New Relic recebe consultas NRQL por Environment, fornecidas por
+`NEW_RELIC_API_GATEWAY_DASHBOARD_QUERIES_JSON` no root New Relic.
 
-Quando aplicado, este root publica o endpoint pelo output `gateway_url`. Antes de qualquer Apply futuro, confirmar conta, state e escopo integral do plan; não aplicar planos de destruição sem aprovação específica.
+Após Apply, o output `gateway_url` retorna o endpoint da API configurada. Antes de Apply, revise conta, State e o Plan
+completo; mudanças destrutivas exigem autorização específica.
