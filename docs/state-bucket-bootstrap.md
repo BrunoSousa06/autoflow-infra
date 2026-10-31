@@ -2,7 +2,7 @@
 
 ## Sequência operacional
 
-1. **Configurar e auditar os GitHub Environments.** `develop` usa `homolog`; `main` usa `production`. Em cada Environment, cadastre `AWS_EXPECTED_ACCOUNT_ID`, `AWS_REGION`, `AWS_TERRAFORM_STATE_BUCKET` e os Secrets temporários `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` e `AWS_SESSION_TOKEN`. Uma identidade administrativa autorizada deve confirmar Required reviewers e branch policies fora da pipeline; só então cadastre `TERRAFORM_APPLY_APPROVAL_CONFIGURED=true`. Os valores de conta, região, bucket e credenciais devem pertencer ao Environment selecionado e à mesma conta AWS Academy Learner Lab. Consulte a [auditoria administrativa externa](github-runner.md#auditoria-administrativa-externa).
+1. **Configurar os GitHub Environments.** `develop` usa `homolog`; `main` usa `production`. Em cada Environment, cadastre `AWS_EXPECTED_ACCOUNT_ID`, `AWS_REGION`, `AWS_TERRAFORM_STATE_BUCKET` e os Secrets temporários `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` e `AWS_SESSION_TOKEN`. Configure Required reviewers e branch policies antes de definir `TERRAFORM_APPLY_APPROVAL_CONFIGURED=true`. Conta, região, bucket e credenciais devem pertencer ao mesmo ambiente.
 
 2. **Validar o contrato dos seis States.** Prepare fora do checkout o JSON de configuração dos roots `vpc_eks`, `rds`, `lambda`, `application`, `api_gateway` e `newrelic` para `homolog` e `production`, com conta, bucket, região, keys e relações `consumes`. Execute `python scripts/terraform_state_contract.py <caminho-externo-para-configuracao.json>`. Essa validação é local, não acessa AWS, não inicializa backend nem prova que os objetos ou States existem; ela verifica prefixos por ambiente, unicidade das keys e consistência produtor/consumidor. A lista de Variables por root está em [`arquitetura.md`](api-gateway/arquitetura.md#states-e-ownership).
 
@@ -20,12 +20,11 @@
 | `apply` | Input booleano que habilita Apply no fluxo Terraform. | `false`; mesmo se enviado como `true`, o Apply é bloqueado quando o input de bootstrap está `true`. |
 | `approve_eks_state_reconciliation` | Autoriza reconciliações delimitadas do State/acesso EKS. | `false`; não é necessário para o bucket. |
 | `allow_destructive` | Autoriza ações destrutivas depois da revisão do Plan. | `false`; não é necessário para o bucket. |
-| `APPROVE_CREATE` | Variable legada anteriormente usada pelo fluxo inline. | Não é lida pelo workflow atual; não configura nem substitui o input de dispatch. |
-| `TERRAFORM_APPLY_APPROVAL_CONFIGURED` | Marcador de configuração que precisa ser `true` somente depois da auditoria externa dos Required reviewers e da branch policy no Environment. | `true` como precondição adicional; não substitui a aprovação nativa nem cria Required reviewers. |
+| `TERRAFORM_APPLY_APPROVAL_CONFIGURED` | Guard adicional de aprovação. | `true` após configurar Required reviewers e branch policy; não substitui a proteção nativa do Environment. |
 
-## Chamadas de workflow para uso futuro
+## Executar o dispatch
 
-Os comandos abaixo são exemplos documentais e **não foram executados**. Para homologação:
+Para homologação:
 
 ```bash
 gh workflow run pipeline.yml --ref develop \
@@ -55,11 +54,10 @@ Para um Plan posterior, faça um novo dispatch com `approve_state_bucket_creatio
 - Bucket existente incompatível: falha sem corrigir controles. A correção deve ser analisada e autorizada separadamente; não use o Plan para fazer bootstrap.
 - Se uma criação nova for seguida por falha ao aplicar/verificar algum controle, o bucket pode permanecer parcialmente configurado. Pare a sequência, preserve-o para inspeção e corrija a configuração sob procedimento autorizado; não o exclua nem inicie Terraform.
 - Se o bootstrap falhar, não execute Plan/Apply. Revise a causa, corrija apenas a configuração aprovada e repita o job isolado quando todas as precondições estiverem atendidas.
-- **Recuperação do HTTP 403 antigo (`Resource not accessible by integration`).** Esse erro vinha das consultas à API administrativa de Environments com `GITHUB_TOKEN` nos preflights de bootstrap, Plan ou Apply. Elas ocorriam antes de configurar credenciais AWS e antes de chamadas AWS; não amplie permissões nem adicione PAT. Atualize para os workflows que validam os valores injetados por `vars`/`secrets`, confirme os valores necessários no Environment selecionado e peça a uma identidade administrativa autorizada para executar a auditoria externa documentada em [github-runner.md](github-runner.md#auditoria-administrativa-externa). Confirme Required reviewers e branch policies antes de manter `TERRAFORM_APPLY_APPROVAL_CONFIGURED=true`. Depois da revisão, repita somente o dispatch isolado de bootstrap (`approve_state_bucket_creation=true`, com `apply`, `approve_eks_state_reconciliation` e `allow_destructive` em `false`). Se esse job tiver concluído, faça Plan/Apply em dispatches separados conforme o fluxo normal.
 
 Os controles exigidos são: `BlockPublicAcls`, `IgnorePublicAcls`, `BlockPublicPolicy` e `RestrictPublicBuckets` verdadeiros; versionamento `Enabled`; criptografia default AES256 sem regra restrita a prefixo; proprietário igual a `AWS_EXPECTED_ACCOUNT_ID`.
 
-Nenhum resultado local comprova estado AWS implantado. O script é testado com mocks; o bucket real só é verificado quando o operador executar o workflow após revisão.
+Os testes locais usam mocks. O workflow isolado verifica o bucket real e seus controles após a aprovação do Environment.
 
 ## Validação local
 

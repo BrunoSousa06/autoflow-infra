@@ -1,14 +1,18 @@
 # Runbook do API Gateway
 
-> Este runbook descreve configuração versionada e procedimentos declarados; não confirma implantação atual na AWS. Após reset, configure os GitHub Environments, valide as State Keys e execute o [bootstrap S3 isolado](../state-bucket-bootstrap.md) antes de qualquer Terraform init ou pipeline de root.
+> Antes de executar os roots Terraform, configure os GitHub Environments, valide as State Keys e execute o [bootstrap S3 isolado](../state-bucket-bootstrap.md) quando o bucket ainda não existir.
 
 ## Topologia
 
-O Amazon API Gateway HTTP API v2 recebe tráfego HTTPS. `POST /auth/login` invoca a Lambda pela integração `AWS_PROXY`, payload `2.0`. Frontend e rotas de negócio seguem por VPC Link e ALB interno até os NodePorts `30080` (Nginx/Angular) e `30081` (Spring Boot) no EKS. Lambda e backend acessam o RDS PostgreSQL privado. A Function URL não faz parte do fluxo configurado.
+O Amazon API Gateway HTTP API v2 recebe tráfego HTTPS. `POST /auth/login` invoca a Lambda pela integração `AWS_PROXY`, payload `2.0`. Frontend e rotas de negócio seguem por VPC Link e ALB interno até os NodePorts `30080` (Nginx/Angular) e `30081` (Spring Boot) no EKS. Lambda e backend acessam o RDS PostgreSQL privado.
 
 ## Provisionamento
 
-Antes de iniciar, configure `homolog` para `develop` e `production` para `main`, incluindo Variables e Secrets próprios de cada Environment e Required reviewers efetivos. Audite os reviewers e branch policies com uma identidade administrativa autorizada antes de definir `TERRAFORM_APPLY_APPROVAL_CONFIGURED=true`; a pipeline não consulta APIs administrativas de Environment. Preencha a matriz das seis State Keys com os valores de conta/região esperados e valide-a com `python scripts/terraform_state_contract.py <caminho-externo-para-configuracao.json>`. O comando valida somente o contrato fornecido, não confirma a identidade AWS, não acessa AWS nem consulta States remotos; a identidade real é validada pelo job protegido. Para recuperação do HTTP 403 no preflight, siga o [runbook do bootstrap S3](../state-bucket-bootstrap.md#controles-falhas-e-recuperacao).
+Antes de iniciar, configure `homolog` para `develop` e `production` para `main`, incluindo Variables, Secrets e Required
+reviewers próprios de cada Environment. Confirme as branch policies e defina `TERRAFORM_APPLY_APPROVAL_CONFIGURED=true`
+somente depois da revisão administrativa dos gates. Preencha a matriz das seis State Keys com conta e região esperadas e
+valide-a com `python scripts/terraform_state_contract.py <caminho-externo-para-configuracao.json>`. O comando valida as
+relações entre as keys fornecidas; os jobs protegidos verificam identidade AWS, bucket e States remotos antes do init.
 
 Antes de qualquer Terraform init, execute o [bootstrap S3 isolado](../state-bucket-bootstrap.md) quando o bucket estiver ausente ou precisar de verificação. O dispatch autorizado verifica identidade AWS e controles do bucket, sem inicializar Terraform ou acionar Plan/Apply. Faça depois um dispatch separado para VPC/EKS, revise o Plan criptografado e só então solicite Apply com os gates do Environment. Não use o input de bootstrap como autorização para provisionamento.
 
@@ -37,4 +41,4 @@ Revise integralmente cada Terraform Plan. Interrompa diante de conta/região/sta
 - Em falha de sessão, conta ou permissão, interrompa o fluxo, renove as credenciais e repita o preflight.
 - Em Plan inesperado ou falha de provisionamento, não aplique novamente sem revisar a causa e gerar um novo Plan.
 - Para falhas de login ou rota, correlacione logs do API Gateway, Lambda e backend por request ID; não habilite log de payload ou token.
-- Mudanças e rollback devem ser feitos por configuração declarativa e pipeline; não altere state manualmente nem reintroduza Kong ou Function URL.
+- Mudanças e rollback devem ser feitos por configuração declarativa e pipeline; não altere State manualmente.

@@ -1,7 +1,7 @@
 # RFC técnica — Entrada do AutoFlow com Amazon API Gateway
 
 - **Data:** 13/10/2026
-- **Estado:** arquitetura e configuração Terraform declaradas nos checkouts; implantação AWS não verificada nesta revisão.
+- **Estado:** RFC técnica da arquitetura AutoFlow com Amazon API Gateway.
 - **Escopo:** HTTP API, autenticação Lambda, acesso privado ao EKS/RDS, operação Terraform e CI/CD deste repositório.
 
 ## Resumo
@@ -26,8 +26,13 @@ O root `infra/api-gateway` consome outputs do state de EKS e consulta EKS, node 
 
 ## CI/CD
 
-CI ocorre em PRs e pushes conforme os workflows. Para `Pipeline` de VPC/EKS, primeiro configure `homolog`/`production` e valide a matriz externa das seis State Keys. O bootstrap do bucket é um `workflow_dispatch` independente autorizado por `approve_state_bucket_creation=true`; não inicia `validate`, Plan, Apply nem Terraform init. Após confirmar o bucket, faça dispatch separado para Plan e, após revisar o Plan, outro dispatch com `apply=true`; o Apply aguarda os gates e usa o Plan criptografado e vinculado à execução. O bootstrap e esses gates descrevem código versionado, não comprovam que os Environments ou recursos AWS estejam efetivamente configurados/implantados. Consulte o [procedimento de bootstrap](../state-bucket-bootstrap.md) e o [runbook](runbook.md).
+CI ocorre em PRs e pushes conforme os workflows. Para provisionar VPC/EKS, configure `homolog`/`production` e valide a
+matriz das seis State Keys. O bootstrap do bucket é um `workflow_dispatch` isolado com
+`approve_state_bucket_creation=true`; não inicia validação, Plan, Apply ou Terraform init. Depois do bootstrap, gere e
+revise o Plan; Apply é um dispatch separado com `apply=true` e os gates do Environment, usando o artifact criptografado
+da execução. Consulte o [procedimento de bootstrap](../state-bucket-bootstrap.md) e o [runbook](runbook.md).
 
 ## Escopo e limites
 
-Esta RFC registra decisões e configuração de arquitetura. Os parâmetros de conta, região, state e credenciais são fornecidos à pipeline pelo ambiente de provisionamento. Procedimentos estão no [`runbook.md`](runbook.md).
+Esta RFC registra as decisões técnicas do gateway e da integração dos serviços. Conta, região, States e credenciais são
+fornecidos pelos GitHub Environments. Os procedimentos estão no [`runbook.md`](runbook.md).

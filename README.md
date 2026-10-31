@@ -1,112 +1,89 @@
 # Infraestrutura do AutoFlow
 
-Este repositório declara a infraestrutura AWS do AutoFlow com Terraform. A arquitetura final é **Amazon API Gateway HTTP API, Lambda, VPC Link, ALB interno, EKS e RDS PostgreSQL**. Não há instalação ou roteamento Kong na configuração operacional.
+Este repositório declara em Terraform a rede e o EKS do AutoFlow, a API Gateway HTTP API v2 e a integração New Relic. O
+gateway encaminha o login à Lambda e o tráfego da aplicação a um ALB interno no EKS.
 
-O código e os documentos descrevem configuração versionada; não comprovam que esses recursos estejam atualmente implantados ou validados na AWS.
+## Responsabilidade e arquitetura
 
-## Documentação da arquitetura
+| Root Terraform | Responsabilidade | Dependências principais |
+|---|---|---|
+| `infra/` | VPC, subnets, Security Groups, EKS e node group | Bootstrap do bucket de State |
+| `infra/api-gateway/` | HTTP API, rotas, Lambda integration, VPC Link, ALB e alarmes CloudWatch | VPC/EKS e Lambda |
+| `infra/newrelic/` | Integração Kubernetes, dashboards, alertas NRQL e Synthetic | EKS, workloads e Secrets prontos |
 
-Leia na ordem: [arquitetura e diagramas C4](docs/api-gateway/arquitetura.md), [ADR-001](docs/api-gateway/adr-001-api-gateway.md), [RFC técnica](docs/api-gateway/rfc-api-gateway.md), [runbook operacional](docs/api-gateway/runbook.md). O [README do root Terraform](infra/api-gateway/README.md) contém validações locais.
-
-O contrato central da aplicação está no [OpenAPI e guia da API](https://github.com/autoflow-fiap/autoflow/blob/develop/docs/openapi/README.md); a [coleção Postman de autenticação CPF/JWT](https://github.com/autoflow-fiap/autoflow/blob/develop/backend/postman/autoflow-serverless-auth.postman_collection.json) também é mantida no repositório da aplicação.
-
-Os ambientes usam os mesmos roots Terraform: `develop` seleciona `homolog` e `main` seleciona `production`. Consulte o [catálogo de variables e secrets](docs/variables-and-secrets.md) para configurar, em cada GitHub Environment, a conta esperada, credenciais temporárias, bucket e keys do Terraform State. Use keys separadas por ambiente e por root. Os nomes dos seis roots e suas Variables de State estão na [tabela de ownership](docs/api-gateway/arquitetura.md#states-e-ownership). Required reviewers e políticas de branch devem ser auditados por uma identidade administrativa autorizada antes de habilitar o gate adicional; veja [execução e auditoria dos Environments](docs/github-runner.md#auditoria-administrativa-externa). Nenhum ID de conta ou credencial é versionado.
-
-Para investigar nós EC2 que não registram no Kubernetes, consulte o [runbook de diagnóstico e recuperação EKS](docs/eks-node-recovery.md). O procedimento é somente leitura até a seção explícita de recuperação manual; não há reboot automatizado.
-
-O root `infra/` e o workflow `Pipeline` gerenciam somente VPC/EKS. New Relic tem state e workflow independentes em [`infra/newrelic/`](infra/newrelic/README.md), sem duplicar recursos AWS de plataforma.
-
-Para iniciar o ambiente, primeiro configure os GitHub Environments e valide o contrato dos seis States com `python scripts/terraform_state_contract.py <caminho-externo-para-configuracao.json>`. Esse comando local valida apenas o contrato informado; não acessa AWS nem prova a existência de States remotos. Em seguida, execute o [bootstrap S3 isolado](docs/state-bucket-bootstrap.md), e só depois faça dispatch separado para Plan/Apply conforme os gates. A [ordem geral de provisionamento](docs/api-gateway/runbook.md) e o [runbook de primeiro provisionamento EKS](docs/eks-primeiro-provisionamento.md) cobrem as dependências entre roots. API Gateway e New Relic iniciam por `workflow_dispatch` explícito depois que suas dependências estiverem prontas. Para New Relic, sincronize antes a License Key pela pipeline da aplicação e confirme que os workloads estão saudáveis. Para objetos New Relic preexistentes, siga o [runbook de migração de state](docs/newrelic-state-migration.md), sem executar migração em deploy normal.
-
-A sequência de reconstrução e os limites dos procedimentos estão documentados no [runbook de primeiro provisionamento EKS](docs/eks-primeiro-provisionamento.md) e no [runbook do API Gateway](docs/api-gateway/runbook.md).
-
-Para diagnóstico dos nós EKS, consulte o [runbook](docs/eks-node-recovery.md). O provisionamento da EC2 runner está descrito em [Runner privado do GitHub Actions](docs/github-runner.md).
-
-## Orquestrador de pipelines — Fase 1
-
-O orquestrador PowerShell consulta, valida e consolida informações do GitHub para `autoflow-infra`, `autoflow-db`, `autoflow-lambda` e `autoflow`. A Fase 1 é somente leitura: não dispara workflows, não altera Environments, Variables, Secrets ou AWS, e não substitui os gates nativos das pipelines.
-
-```powershell
-.\scripts\orchestration\Invoke-AutoFlowPipeline.ps1 -Environment homolog -Action status
-.\scripts\orchestration\Invoke-AutoFlowPipeline.ps1 -Environment homolog -Action validate
-.\scripts\orchestration\Invoke-AutoFlowPipeline.ps1 -Environment homolog -Action report -JsonPath "$env:TEMP\autoflow-report.json" -MarkdownPath "$env:TEMP\autoflow-report.md"
-.\scripts\orchestration\Invoke-AutoFlowPipeline.ps1 -Environment homolog -Action report -DryRun
-```
-
-Consulte o [guia de uso, permissões e interpretação](docs/pipeline-orchestrator.md), a [arquitetura da Fase 1](docs/pipeline-orchestrator-architecture.md) e o [runbook de operação e troubleshooting](docs/pipeline-orchestrator-runbook.md). `validate` consulta `homolog` e `production` para avaliar isolamento das seis State Keys. Resultados de pipeline não comprovam que recursos AWS foram provisionados.
-
-## Responsabilidades
-
-- `infra/`: VPC, subnets, Security Groups, EKS e node group.
-- `infra/api-gateway/`: HTTP API, rotas, integração nativa com Lambda, VPC Link, ALB interno, Target Groups e observabilidade.
-- `autoflow`: Deployments, Services internos e NodePorts privados consumidos pelo ALB.
-- `autoflow-lambda`: função de autenticação e execução em rede privada.
-- `autoflow-db`: RDS PostgreSQL e controles de rede.
-
-## Fluxo de requisições
+Os outros repositórios provisionam o RDS (`autoflow-db`), a função (`autoflow-lambda`) e os workloads Kubernetes
+(`autoflow`). O contrato central está no [guia OpenAPI](https://github.com/autoflow-fiap/autoflow/blob/develop/docs/openapi/README.md)
+e na [coleção Postman de autenticação](https://github.com/autoflow-fiap/autoflow/blob/develop/backend/postman/autoflow-serverless-auth.postman_collection.json);
+o modelo relacional está no [diagrama ER](https://github.com/autoflow-fiap/autoflow-db/blob/develop/docs/diagrama-er.md).
 
 ```mermaid
 flowchart LR
-  Browser[Navegador] -->|HTTPS| API[API Gateway HTTP API]
-  API -->|AWS_PROXY payload 2.0| Lambda[Lambda de autenticação]
+  Browser[Navegador] -->|HTTPS| API[API Gateway HTTP API v2]
+  API -->|POST /auth/login — AWS_PROXY| Lambda[Lambda de autenticação]
   Lambda --> RDS[(RDS PostgreSQL)]
-  API -->|VPC Link| ALB[ALB interno]
-  ALB -->|NodePorts privados| EKS[EKS: Nginx e Spring Boot]
+  API -->|HTTP_PROXY — VPC Link| ALB[ALB interno]
+  ALB --> EKS[EKS: Nginx/Angular e Spring Boot]
   EKS --> RDS
+  EKS -.->|APM, métricas e logs — se habilitados| NR[New Relic]
 ```
 
-O navegador usa a mesma origem HTTPS para frontend e API. O API Gateway invoca a Lambda diretamente; as integrações de negócio e frontend usam VPC Link e ALB interno. A Function URL antiga foi removida; a invocação da Lambda ocorre pela permissão restrita ao API Gateway.
+Os diagramas C4, sequências de autenticação e implantação estão em [arquitetura e fluxos](docs/api-gateway/arquitetura.md).
+As decisões e procedimentos estão no [ADR-001](docs/api-gateway/adr-001-api-gateway.md), [RFC](docs/api-gateway/rfc-api-gateway.md)
+e [runbooks](docs/api-gateway/runbook.md).
 
-## Ordem de implantação
+## CI/CD e ambientes
 
-Para cada ambiente, execute a sequência de dependências: (1) VPC/EKS e rede; (2) RDS e conectividade privada; (3) Lambda; (4) dispatch inicial de API Gateway, VPC Link e ALB interno; (5) aplicação no EKS; (6) New Relic após License Key e workloads saudáveis; (7) smoke tests ponta a ponta. Produção usa os recursos `autoflow-production`; homologação mantém `autoflow`. O procedimento está no [runbook](docs/api-gateway/runbook.md).
+- `develop` seleciona `homolog`; `main` seleciona `production`.
+- `ci.yml` valida os roots, testes e guardrails em Pull Requests para `develop`/`main` e pushes para essas branches e
+  `feature/**`. A CI não usa credenciais AWS nem executa Plan/Apply.
+- Os workflows `Pipeline`, `Migração HTTP API` e `New Relic Pipeline` também recebem `push` em `develop`/`main`.
+- O gate valida a CI do mesmo repositório, branch e SHA. `AUTO_CD_ENABLED=true` no Environment selecionado habilita o
+  caminho automático, que executa Plan, não Apply.
+- Apply requer `workflow_dispatch` com `apply=true` e `TERRAFORM_APPLY_APPROVAL_CONFIGURED=true`; os jobs usam o
+  Environment selecionado. Configure Required reviewers e restrições de branch nos Environments; `main` exige proteção
+  de branch.
+- O bootstrap do bucket é um dispatch isolado documentado em [state-bucket-bootstrap.md](docs/state-bucket-bootstrap.md).
+- `pr-automatico.yaml` solicita Pull Request de `main` para `develop` em pushes para `main`.
+- Configure proteção de branch em `develop` e `main` para exigir Pull Request e checks de CI.
 
-## States e pipelines
+CI e Terraform Plan validam código e mudanças propostas; somente Apply provisiona ou atualiza recursos AWS. Consulte
+[início automático do CD](docs/ci-cd-automatico.md) e o [catálogo de Variables e Secrets](docs/variables-and-secrets.md).
 
-Os seis roots usam States S3 independentes por Environment: VPC/EKS, New Relic, aplicação, RDS, Lambda e API Gateway. As keys devem ser exclusivas por ambiente/root, usar prefixo `homolog/` ou `production/` e ser consumidas exatamente pelo root dependente. O validador de contrato de seis States recebe a matriz externamente e não é executado automaticamente por todos os workflows; consulte a tabela de ownership para as Variables observadas e limitações dos checkouts. Não inicialize State vazio sobre recursos existentes e não edite arquivos de State manualmente.
+## Ordem de provisionamento
 
-Para criar ou verificar o bucket backend sem iniciar Plan, Apply ou Terraform, siga o [procedimento isolado de bootstrap do bucket](docs/state-bucket-bootstrap.md).
+Para cada ambiente, respeite as dependências nesta ordem:
 
-### Validação integrada dos seis States
+1. `autoflow-infra` — VPC/EKS.
+2. `autoflow-db` — RDS PostgreSQL.
+3. `autoflow-lambda` — autenticação.
+4. `autoflow-infra` — API Gateway.
+5. `autoflow` — aplicação Kubernetes.
+6. `autoflow-infra` — New Relic.
 
-Execute os testes locais da política integrada, sem acesso à AWS:
+O provisionamento é separado por repositório e não é orquestrado automaticamente. Use o [runbook de primeiro provisionamento](docs/eks-primeiro-provisionamento.md)
+e não inicialize State vazio sobre recursos existentes.
+
+Para operação, consulte o [bootstrap do bucket](docs/state-bucket-bootstrap.md), o [runbook de manutenção dos nós EKS](docs/eks-node-recovery.md)
+e a [configuração dos runners GitHub-hosted](docs/github-runner.md).
+
+## Terraform State e observabilidade
+
+Os seis roots mantêm States S3 separados por root e Environment: VPC/EKS, RDS, Lambda, API Gateway, aplicação e New Relic.
+As keys são fornecidas pelos GitHub Environments e devem permanecer distintas; dependências e validações estão na [tabela de ownership](docs/api-gateway/arquitetura.md#states-e-ownership).
+
+A aplicação configura o agente APM Java, logs JSON correlacionados e eventos de negócio. `infra/newrelic/` provisiona,
+quando habilitado por Environment, monitoramento Kubernetes/Fluent Bit, dashboards e condições de alerta para CPU/memória,
+latência, disponibilidade e eventos de OS. Synthetic requer URL e locations. O root de API Gateway configura logs e
+alarmes CloudWatch; seus destinos SNS são opcionais. Consulte [`infra/newrelic/README.md`](infra/newrelic/README.md).
+
+## Validar localmente
+
+Valide o root VPC/EKS sem backend remoto e sem acesso à AWS:
 
 ```bash
-python -m unittest discover -s scripts -p 'test_terraform_state_contract.py' -v
-python -m unittest discover -s scripts -p 'test_terraform_deployment_fingerprint.py' -v
+terraform -chdir=infra init -backend=false -input=false
+terraform -chdir=infra validate
 ```
 
-Para conferir a configuração efetiva antes de qualquer operação Terraform, prepare fora do checkout um JSON com os roots `vpc_eks`, `rds`, `lambda`, `application`, `api_gateway` e `newrelic` para ambos os Environments. Cada root informa `account_id`, `bucket`, `region` e `key`; roots consumidores também informam em `consumes` as keys recebidas dos produtores. O contrato compara RDS→VPC/EKS, Lambda→VPC/EKS e RDS, aplicação→RDS, API Gateway→VPC/EKS e New Relic→VPC/EKS. Obtenha os valores diretamente das Variables dos GitHub Environments e não registre o arquivo, valores reais, IDs, ARNs ou States no repositório ou nos logs.
-
-```bash
-python scripts/terraform_state_contract.py <caminho-externo-para-configuracao.json>
-```
-
-O comando exige prefixos por Environment, seis keys exclusivas por bucket, ausência de cruzamento entre homologação e produção, igualdade produtor/consumidor e correspondência de conta, bucket e região. Ele não inicializa backend, consulta objetos S3 ou lê conteúdo de State. Os testes usam apenas valores sintéticos e não definem sufixos autoritativos.
-
-Os backends S3 recebem `allowed_account_ids` por `-backend-config`, derivada exclusivamente de `AWS_EXPECTED_ACCOUNT_ID` do Environment; o `terraform_remote_state` do API Gateway usa o mesmo valor externo. Não passe `expected_bucket_owner` ao Terraform 1.16.5. A verificação de ownership permanece nas operações AWS CLI compatíveis, como `head-object --expected-bucket-owner`, antes do init; essa checagem não lê nem imprime o conteúdo do State. Todos os inits remotos mantêm `encrypt=true` e `use_lockfile=true`.
-
-### Validação local dos seis roots Terraform
-
-Na raiz do workspace que contém os quatro repositórios, inicialize sem backend remoto e valide cada root (não use credenciais AWS para estes comandos):
-
-```bash
-terraform -chdir=autoflow-infra/infra init -backend=false -input=false
-terraform -chdir=autoflow-infra/infra validate
-terraform -chdir=autoflow-infra/infra/newrelic init -backend=false -input=false
-terraform -chdir=autoflow-infra/infra/newrelic validate
-terraform -chdir=autoflow-infra/infra/api-gateway init -backend=false -input=false
-terraform -chdir=autoflow-infra/infra/api-gateway validate
-terraform -chdir=autoflow/infra init -backend=false -input=false
-terraform -chdir=autoflow/infra validate
-terraform -chdir=autoflow-lambda/infra init -backend=false -input=false
-terraform -chdir=autoflow-lambda/infra validate
-terraform -chdir=autoflow-db/infra init -backend=false -input=false
-terraform -chdir=autoflow-db/infra validate
-```
-
-Para verificar argumentos do backend contra o Terraform 1.16.5 sem acessar AWS, execute `python -m unittest discover -s autoflow-infra/scripts -p "test_terraform_backend_config.py" -v`. O teste de init S3 usa um bucket fictício, configuração temporária, sem credenciais e endpoint restrito a `127.0.0.1`; a falha de conexão local é esperada e nenhuma API AWS ou State remoto é alcançado.
-
-O workflow `.github/workflows/ci.yml` executa automaticamente os guards e validações estáticas em PRs para `develop`/`main` e pushes para `develop`, `main` e `feature/**`, sem configurar credenciais AWS ou executar Terraform Plan/Apply. Os workflows `Pipeline`, `Migração HTTP API` e `New Relic Pipeline` mantêm os três componentes de CD independentes e aceitam somente `workflow_dispatch` em `develop`/`main`; o mapeamento é `develop` → `homolog` e `main` → `production`, com produção condicionada a `github.ref_protected`. Os jobs obtêm configuração diretamente de `${{ vars.* }}` e `${{ secrets.* }}` e falham antes de configurar credenciais AWS quando valores obrigatórios estão vazios, conta/região são inválidas ou State Keys não pertencem ao Environment selecionado. Nenhum workflow consulta APIs administrativas de Variables, Secrets ou proteção de Environments com `GITHUB_TOKEN`. A aprovação nativa do Environment protege Plan e Apply separadamente. O Plan pode ser executado com `TERRAFORM_APPLY_APPROVAL_CONFIGURED=false`; Apply continua exigindo dispatch explícito `apply=true`, Required reviewers no Environment e `TERRAFORM_APPLY_APPROVAL_CONFIGURED=true`. Antes de definir esse marcador, valide externamente Required reviewers e políticas de branch com uma identidade administrativa autorizada. No workflow `Pipeline`, `approve_state_bucket_creation=true` inicia somente o job isolado de bootstrap e ignora `validate`, Plan e Apply; `apply`, `approve_eks_state_reconciliation` e `allow_destructive` devem ficar `false`. O Plan comum somente verifica existência, propriedade e controles do bucket. Apply reutiliza o artifact criptografado, vinculado ao run/commit e ao fingerprint. `APPROVE_CREATE` era uma Variable legada do fluxo inline e não é consumida pelo workflow atual. Para recuperação de uma falha antiga HTTP 403, siga o [procedimento de bootstrap](docs/state-bucket-bootstrap.md#controles-falhas-e-recuperacao). Exclusões e substituições continuam bloqueadas por padrão. Consulte a [RFC](docs/api-gateway/rfc-api-gateway.md) e o [runbook](docs/api-gateway/runbook.md). Nenhum workflow instala gateways adicionais.
-
-Use `AWS_PROFILE`, `AWS_REGION`, `AWS_EXPECTED_ACCOUNT_ID` e `TF_VAR_*` localmente. Antes do Plan VPC/EKS, `scripts/verify_eks_iam_roles.py --discover` identifica exatamente uma role de cluster e uma de node group por STS/IAM, validando conta, trust policies, AWS managed policies e a role do cluster existente. O Apply valida as roles gravadas no Plan aprovado, sem as redescobrir. Os guards são somente leitura e não alteram IAM. GitHub Actions Variables contêm conta, região, bucket e keys; credenciais e dados sensíveis permanecem em GitHub Secrets.
+Os outros roots têm seus próprios comandos e pré-requisitos documentados nos respectivos READMEs. O Plan apresenta as
+mudanças propostas; Apply é a operação que provisiona ou atualiza recursos e deve ser executado pelos gates do Environment.

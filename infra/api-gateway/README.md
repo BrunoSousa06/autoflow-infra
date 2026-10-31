@@ -2,14 +2,15 @@
 
 Gateway de entrada definitivo do AutoFlow: HTTP API v2, integração nativa Lambda, VPC Link v2 e ALB **interno** para backend e frontend no EKS.
 
-O root declara HTTP API, VPC Link e ALB interno. Após reset do Learner Lab, configure os GitHub Environments, valide as State Keys, execute o bootstrap S3 isolado quando necessário e só então use a pipeline Migração HTTP API depois das dependências. Essas declarações não comprovam recursos atualmente implantados.
+O root declara HTTP API, VPC Link e ALB interno. A pipeline `Migração HTTP API` consome os GitHub Environments e os
+States de VPC/EKS; o bootstrap S3 isolado deve ser executado quando o bucket ainda não existir.
 
 Os documentos ficam em `autoflow-infra/docs/api-gateway/`, a partir da raiz do repositório:
 
 - [Arquitetura e diagramas C4](../../docs/api-gateway/arquitetura.md)
-- [ADR-001 — substituição Kong → API Gateway](../../docs/api-gateway/adr-001-api-gateway.md)
+- [ADR-001 — API Gateway HTTP API v2](../../docs/api-gateway/adr-001-api-gateway.md)
 - [RFC técnica](../../docs/api-gateway/rfc-api-gateway.md)
-- [Runbook: Learner Lab, implantação, smoke, recuperação e rollback](../../docs/api-gateway/runbook.md)
+- [Runbook de implantação, validação e recuperação](../../docs/api-gateway/runbook.md)
 
 ## Uso local
 
@@ -28,4 +29,15 @@ O backend S3 é parcial e este root não cria o bucket. Configure bucket, regiã
 
 Para validar a configuração local sem AWS, execute `terraform init -backend=false -input=false`, `terraform validate` e `python -m unittest discover -s scripts -p "test_terraform_backend_config.py" -v` na raiz do repositório. Para um init remoto autorizado, use somente o bucket/key aprovados e a configuração externa de conta, mantendo os mesmos argumentos de criptografia e locking descritos no workflow.
 
-Quando aplicado, este root publica o endpoint pelo output `gateway_url`. Antes de qualquer Apply futuro, confirmar conta, state e escopo integral do plan; não aplicar planos de destruição sem aprovação específica.
+## Observabilidade declarada
+
+O root configura access logs JSON no CloudWatch com `requestId`, template de rota, status HTTP, latência e status de
+integração; não registra IP, query, body ou headers. O log group retém eventos por sete dias. Há alarmes CloudWatch para
+respostas 5xx e ausência de targets saudáveis no ALB. `alarm_actions` é vazio por padrão, portanto não declara destino de
+notificação; métricas detalhadas por rota também ficam desativadas por padrão e exigem habilitação externa.
+
+O dashboard opcional de API Gateway no New Relic recebe consultas NRQL por Environment, fornecidas por
+`NEW_RELIC_API_GATEWAY_DASHBOARD_QUERIES_JSON` no root New Relic.
+
+Após Apply, o output `gateway_url` retorna o endpoint da API configurada. Antes de Apply, revise conta, State e o Plan
+completo; mudanças destrutivas exigem autorização específica.
