@@ -1,0 +1,320 @@
+"""Valida configuração New Relic e bloqueia desativações Terraform acidentais."""
+
+from __future__ import annotations
+
+import json
+import hashlib
+import base64
+import binascii
+import os
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+
+ACCOUNT_ID_PATTERN = re.compile(r"[1-9][0-9]*\Z")
+AWS_ACCOUNT_ID_PATTERN = re.compile(r"[0-9]{12}\Z")
+WORKLOAD_READY_TIMEOUT_SECONDS = 300
+WORKLOAD_POLL_INTERVAL_SECONDS = 10
+FINGERPRINT_INPUTS = (
+    "AWS_EXPECTED_ACCOUNT_ID",
+    "AWS_REGION",
+    "EKS_CLUSTER_NAME",
+    "AWS_TF_STATE_KEY_INFRA",
+    "AWS_TF_STATE_KEY_NEWRELIC",
+    "TF_STATE_BUCKET",
+    "TF_VAR_aws_region",
+    "TF_VAR_aws_allowed_account_ids",
+    "TF_VAR_eks_cluster_name",
+    "TF_VAR_enable_newrelic_kubernetes",
+    "TF_VAR_enable_newrelic_account_resources",
+    "TF_VAR_newrelic_account_id",
+    "TF_VAR_newrelic_region",
+    "TF_VAR_newrelic_environment",
+    "TF_VAR_newrelic_synthetic_url",
+    "TF_VAR_newrelic_synthetic_locations",
+    "TF_VAR_newrelic_api_gateway_dashboard_queries",
+)
+
+
+class ConfigurationError(ValueError):
+    """Configuração externa ausente ou inconsistente."""
+
+
+def _required(environment: dict[str, str], name: str) -> str:
+    value = environment.get(name, "").strip()
+    if not value:
+        github_name = {
+            "TF_VAR_enable_newrelic_kubernetes": "ENABLE_NEWRELIC_KUBERNETES",
+            "TF_VAR_enable_newrelic_account_resources": "ENABLE_NEWRELIC_ACCOUNT_RESOURCES",
+            "TF_VAR_newrelic_account_id": "NEW_RELIC_ACCOUNT_ID",
+            "TF_VAR_newrelic_region": "NEW_RELIC_REGION",
+            "TF_VAR_newrelic_api_key": "NEW_RELIC_API_KEY",
+            "TF_VAR_newrelic_environment": "NEW_RELIC_ENVIRONMENT",
+        }.get(name, name)
+        raise ConfigurationError(f"{github_name} ausente ou vazio.")
+    return value
+
+
+def validate_inputs(environment: dict[str, str]) -> tuple[bool, bool]:
+    expected_aws_account = _required(environment, "AWS_EXPECTED_ACCOUNT_ID")
+    if AWS_ACCOUNT_ID_PATTERN.fullmatch(expected_aws_account) is None:
+        raise ConfigurationError("AWS_EXPECTED_ACCOUNT_ID deve conter 12 dígitos.")
+
+    kubernetes_value = _required(environment, "TF_VAR_enable_newrelic_kubernetes")
+    account_value = _required(environment, "TF_VAR_enable_newrelic_account_resources")
+    if kubernetes_value not in {"true", "false"}:
+        raise ConfigurationError("ENABLE_NEWRELIC_KUBERNETES deve ser true ou false.")
+    if account_value not in {"true", "false"}:
+        raise ConfigurationError("ENABLE_NEWRELIC_ACCOUNT_RESOURCES deve ser true ou false.")
+
+    enable_kubernetes = kubernetes_value == "true"
+    enable_account = account_value == "true"
+    environment_name = _required(environment, "TF_VAR_newrelic_environment")
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", environment_name) is None:
+        raise ConfigurationError("NEW_RELIC_ENVIRONMENT possui formato inválido.")
+    if enable_account:
+        account_id = _required(environment, "TF_VAR_newrelic_account_id")
+        if ACCOUNT_ID_PATTERN.fullmatch(account_id) is None:
+            raise ConfigurationError("NEW_RELIC_ACCOUNT_ID ausente ou inválido.")
+        region = _required(environment, "TF_VAR_newrelic_region")
+        if region not in {"US", "EU"}:
+            raise ConfigurationError("NEW_RELIC_REGION deve ser US ou EU.")
+        _required(environment, "TF_VAR_newrelic_api_key")
+    synthetic_url = environment.get("TF_VAR_newrelic_synthetic_url", "").strip()
+    synthetic_locations = environment.get("TF_VAR_newrelic_synthetic_locations", "[]").strip() or "[]"
+    try:
+        locations = json.loads(synthetic_locations)
+    except json.JSONDecodeError as error:
+        raise ConfigurationError("NEW_RELIC_SYNTHETIC_LOCATIONS_JSON deve ser uma lista JSON.") from error
+    if not isinstance(locations, list) or not all(isinstance(item, str) and item.strip() for item in locations):
+        raise ConfigurationError("NEW_RELIC_SYNTHETIC_LOCATIONS_JSON deve conter somente nomes não vazios.")
+    if bool(synthetic_url) != bool(locations):
+        raise ConfigurationError("URL Synthetic e locations devem ser fornecidas juntas ou ambas vazias.")
+    gateway_queries_value = environment.get("TF_VAR_newrelic_api_gateway_dashboard_queries", "[]").strip() or "[]"
+    try:
+        gateway_queries = json.loads(gateway_queries_value)
+    except json.JSONDecodeError as error:
+        raise ConfigurationError("NEW_RELIC_API_GATEWAY_DASHBOARD_QUERIES_JSON deve ser uma lista JSON.") from error
+    if not isinstance(gateway_queries, list) or not all(
+        isinstance(item, dict)
+        and isinstance(item.get("title"), str)
+        and item["title"].strip()
+        and isinstance(item.get("query"), str)
+        and item["query"].strip()
+        for item in gateway_queries
+    ):
+        raise ConfigurationError("Cada widget de API Gateway exige título e NRQL não vazios.")
+
+    return enable_kubernetes, enable_account
+
+
+def _is_new_relic_change(resource: dict[str, Any]) -> bool:
+    resource_type = str(resource.get("type", ""))
+    address = str(resource.get("address", "")).lower()
+    return resource_type.startswith("newrelic_") or "helm_release.newrelic_kubernetes" in address
+
+
+def check_plan(plan: dict[str, Any], environment: dict[str, str]) -> None:
+    enabled_kubernetes, enabled_account = validate_inputs(environment)
+    eks_exists = environment.get("EKS_CLUSTER_EXISTS", "true") == "true"
+    approved = environment.get("NEWRELIC_DEACTIVATION_APPROVED") == "true"
+    deactivations: list[str] = []
+
+    for resource in plan.get("resource_changes", []):
+        if not _is_new_relic_change(resource):
+            continue
+        actions = set(resource.get("change", {}).get("actions", []))
+        if "delete" not in actions:
+            continue
+
+        resource_type = str(resource.get("type", ""))
+        is_kubernetes_release = resource_type == "helm_release"
+        if is_kubernetes_release and not eks_exists:
+            # Em um reset, o release remoto desapareceu junto com o cluster;
+            # remover sua referência órfã do state não desativa um agente ativo.
+            continue
+        if (
+            (is_kubernetes_release and enabled_kubernetes and eks_exists)
+            or (not is_kubernetes_release and enabled_account)
+        ):
+            raise ConfigurationError("O plan tenta remover recursos New Relic ainda habilitados; execução bloqueada.")
+        deactivations.append(str(resource.get("address", "")))
+
+    if deactivations and not approved:
+        raise ConfigurationError(
+            "O plan removeria recursos New Relic; desativação bloqueada sem workflow_dispatch, apply e aprovação explícita."
+        )
+
+
+def check_legacy_root_plan(plan: dict[str, Any]) -> None:
+    """Bloqueia exclusões residuais do root legado até transferência aprovada."""
+    if any(
+        _is_new_relic_change(resource)
+        and "delete" in set(resource.get("change", {}).get("actions", []))
+        for resource in plan.get("resource_changes", [])
+    ):
+        raise ConfigurationError(
+            "O root legado ainda possui recursos New Relic no state; exclusões bloqueadas. "
+            "Execute o procedimento manual de migração com autorização explícita."
+        )
+
+
+def verify_kubernetes_secret(environment: dict[str, str]) -> None:
+    namespace = "default"
+    secret_name = "newrelic-license"
+    secret_key = "licenseKey"
+    try:
+        result = subprocess.run(
+            ["kubectl", "get", "secret", secret_name, "--namespace", namespace, "--output", "json"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as error:
+        raise ConfigurationError("Não foi possível verificar a referência de Secret no Kubernetes.") from error
+    if result.returncode:
+        raise ConfigurationError("Secret New Relic ausente ou inacessível no namespace configurado.")
+    try:
+        data = json.loads(result.stdout).get("data", {})
+        encoded_value = data.get(secret_key)
+        if not isinstance(encoded_value, str) or not encoded_value:
+            raise ConfigurationError("A chave configurada está ausente no Secret Kubernetes.")
+        try:
+            decoded_value = base64.b64decode(encoded_value, validate=True)
+        except (ValueError, binascii.Error) as error:
+            raise ConfigurationError("A chave configurada no Secret Kubernetes é inválida.") from error
+        if not decoded_value:
+            raise ConfigurationError("A chave configurada está vazia no Secret Kubernetes.")
+    except (AttributeError, json.JSONDecodeError) as error:
+        raise ConfigurationError("Resposta Kubernetes inválida ao verificar Secret New Relic.") from error
+
+
+def verify_application_workloads() -> None:
+    """Garante que a observabilidade não seja aplicada antes do deploy da aplicação."""
+    def get_resource(kind: str, name: str) -> dict[str, Any]:
+        try:
+            result = subprocess.run(
+                ["kubectl", "get", kind, name, "--namespace", "default", "--output", "json"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as error:
+            raise ConfigurationError(
+                f"Não foi possível verificar {kind[:-1].title()} {name} no namespace default."
+            ) from error
+        resource_kind = kind[:-1].title()
+        if result.returncode:
+            raise ConfigurationError(
+                f"{resource_kind} {name} ausente ou inacessível no namespace default; New Relic bloqueado."
+            )
+        try:
+            item = json.loads(result.stdout)
+            metadata = item["metadata"]
+            if metadata.get("name") != name or metadata.get("namespace") != "default":
+                raise ConfigurationError(
+                    f"{resource_kind} {name} não corresponde ao recurso esperado no namespace default."
+                )
+            return item
+        except (AttributeError, KeyError, TypeError, json.JSONDecodeError) as error:
+            raise ConfigurationError(
+                f"Resposta Kubernetes inválida para {resource_kind} {name} no namespace default."
+            ) from error
+
+    for service_name in ("autoflow-backend-internal", "autoflow-frontend-internal"):
+        get_resource("services", service_name)
+
+    deployment_names = ("autoflow-backend", "autoflow-frontend")
+    deadline = time.monotonic() + WORKLOAD_READY_TIMEOUT_SECONDS
+    while True:
+        statuses = []
+        for name in deployment_names:
+            item = get_resource("deployments", name)
+            try:
+                desired = item.get("spec", {}).get("replicas")
+                available = item.get("status", {}).get("availableReplicas", 0)
+                ready = item.get("status", {}).get("readyReplicas", 0)
+                if any(type(count) is not int or count < 0 for count in (desired, available, ready)):
+                    raise TypeError("réplicas inválidas")
+            except (AttributeError, TypeError) as error:
+                raise ConfigurationError(
+                    f"Estado inválido de Deployment {name} no namespace default."
+                ) from error
+            statuses.append((name, desired, available, ready))
+
+        not_ready = [status for status in statuses if status[1] == 0 or status[3] < status[1]]
+        if not not_ready:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            details = "; ".join(
+                f"Deployment {name}: desired={desired}, available={available}, ready={ready}"
+                for name, desired, available, ready in not_ready
+            )
+            raise ConfigurationError(
+                f"Tempo limite aguardando Deployments prontos no namespace default: {details}; New Relic bloqueado."
+            )
+        time.sleep(min(WORKLOAD_POLL_INTERVAL_SECONDS, remaining))
+
+
+def config_fingerprint(environment: dict[str, str]) -> str:
+    validate_inputs(environment)
+    normalized = {name: environment.get(name, "") for name in FINGERPRINT_INPUTS}
+    payload = json.dumps(normalized, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def main(arguments: list[str] | None = None) -> int:
+    arguments = sys.argv[1:] if arguments is None else arguments
+    try:
+        if arguments == ["validate"]:
+            validate_inputs(dict(os.environ))
+            print("Configuração New Relic e conta AWS validadas.")
+            return 0
+        if arguments == ["verify-secret"]:
+            verify_kubernetes_secret(dict(os.environ))
+            print("Referência de Secret New Relic verificada sem ler ou exibir seu conteúdo.")
+            return 0
+        if arguments == ["verify-workloads"]:
+            verify_application_workloads()
+            print("Deployments e Services do AutoFlow estão disponíveis para observabilidade.")
+            return 0
+        if len(arguments) == 2 and arguments[0] == "fingerprint":
+            fingerprint = config_fingerprint(dict(os.environ))
+            Path(arguments[1]).write_text(f"{fingerprint}\n", encoding="ascii")
+            print("Fingerprint não secreto da configuração New Relic registrado.")
+            return 0
+        if len(arguments) == 2 and arguments[0] == "verify-fingerprint":
+            expected = Path(arguments[1]).read_text(encoding="ascii").strip()
+            if not re.fullmatch(r"[a-f0-9]{64}", expected) or config_fingerprint(dict(os.environ)) != expected:
+                raise ConfigurationError("A configuração New Relic mudou entre plan e apply; execução bloqueada.")
+            print("Configuração New Relic idêntica à vinculada ao plan.")
+            return 0
+        if len(arguments) == 2 and arguments[0] == "check-plan":
+            plan = json.loads(Path(arguments[1]).read_text(encoding="utf-8"))
+            check_plan(plan, dict(os.environ))
+            print("Plano sem remoção New Relic acidental.")
+            return 0
+        if len(arguments) == 2 and arguments[0] == "check-legacy-plan":
+            plan = json.loads(Path(arguments[1]).read_text(encoding="utf-8"))
+            check_legacy_root_plan(plan)
+            print("Plan do root legado não remove recursos New Relic.")
+            return 0
+        print(
+            "Uso: newrelic_pipeline_guard.py validate | verify-secret | fingerprint <arquivo> | "
+            "verify-workloads | verify-fingerprint <arquivo> | check-plan <terraform-plan.json> | "
+            "check-legacy-plan <terraform-plan.json>",
+            file=sys.stderr,
+        )
+        return 2
+    except (ConfigurationError, OSError, json.JSONDecodeError) as error:
+        print(f"Validação New Relic bloqueada: {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

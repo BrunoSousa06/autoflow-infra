@@ -1,0 +1,89 @@
+name: AutoFlow infra CI
+
+on:
+  push:
+    branches: [develop, main, 'feature/**']
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [develop, main]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  vpc-eks:
+    name: CI Terraform de VPC/EKS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python -m unittest discover -s scripts -p "test_verify_aws_account.py" -v
+      - run: python -m unittest discover -s scripts -p "test_verify_eks_iam_roles.py" -v
+      - run: python -m unittest discover -s scripts -p "test_terraform_state_contract.py" -v
+      - run: python -m unittest discover -s scripts -p "test_terraform_deployment_fingerprint.py" -v
+      - run: python -m unittest discover -s scripts -p "test_terraform_state_root_contracts.py" -v
+      - run: python -m unittest discover -s scripts -p "test_bootstrap_state_bucket.py" -v
+      - run: python -m unittest discover -s scripts -p "test_bootstrap_workflow_isolation.py" -v
+      - run: python -m unittest discover -s scripts -p "test_github_environment_guards.py" -v
+      - run: python -m unittest discover -s scripts -p "test_eks_endpoint_access.py" -v
+      - run: python -m unittest discover -s scripts -p "test_prepare_eks_access_imports.py" -v
+      - run: python -m unittest discover -s scripts -p "test_prepare_eks_network_imports.py" -v
+      - run: python -m unittest discover -s scripts -p "test_state_resource_guard.py" -v
+      - run: python -m unittest discover -s scripts -p "test_review_eks_plan.py" -v
+      - run: python -m unittest discover -s scripts -p "test_ci_cd_workflow_matrix.py" -v
+      - run: python -m unittest discover -s scripts -p "test_validate_cd_trigger.py" -v
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.5"
+          terraform_wrapper: false
+      - run: python -m unittest discover -s scripts -p "test_terraform_backend_config.py" -v
+      - run: terraform fmt -check -recursive infra
+      - run: terraform -chdir=infra init -backend=false -input=false
+      - run: terraform -chdir=infra validate
+
+  api-gateway:
+    name: CI HTTP API Gateway
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.AUTOFLOW_REPOSITORY || format('{0}/autoflow', github.repository_owner) }}
+          ref: ${{ vars.AUTOFLOW_CONTRACT_REF || 'develop' }}
+          path: .contract-autoflow
+          token: ${{ secrets.AUTOFLOW_READ_TOKEN || github.token }}
+      - name: Confrontar allowlist com controllers
+        env:
+          AUTOFLOW_REPO: ${{ github.workspace }}/.contract-autoflow
+        run: python -m unittest discover -s scripts -p test_gateway_routes.py -v
+      - run: python -m unittest discover -s scripts -p test_prepare_gateway_imports.py -v
+      - run: python -m unittest discover -s scripts -p test_github_environment_guards.py -v
+      - run: python -m unittest discover -s scripts -p test_ci_cd_workflow_matrix.py -v
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.5"
+          terraform_wrapper: false
+      - run: python -m unittest discover -s scripts -p test_terraform_backend_config.py -v
+      - run: terraform -chdir=infra/api-gateway fmt -check -recursive
+      - run: terraform -chdir=infra/api-gateway init -backend=false -input=false
+      - run: terraform -chdir=infra/api-gateway validate
+      - run: terraform -chdir=infra/api-gateway test
+      - run: terraform -chdir=infra/api-gateway/modules/private-eks init -backend=false -input=false
+      - run: terraform -chdir=infra/api-gateway/modules/private-eks test
+
+  newrelic:
+    name: CI New Relic
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python -m unittest discover -s scripts -p "test_github_environment_guards.py" -v
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.5"
+          terraform_wrapper: false
+      - run: python -m unittest discover -s scripts -p "test_terraform_backend_config.py" -v
+      - run: python -m unittest discover -s scripts -p "test_newrelic_*.py" -v
+      - run: python -m unittest discover -s scripts -p "test_ci_cd_workflow_matrix.py" -v
+      - run: terraform fmt -check -recursive infra/newrelic
+      - run: terraform -chdir=infra/newrelic init -backend=false -input=false -lockfile=readonly
+      - run: terraform -chdir=infra/newrelic validate

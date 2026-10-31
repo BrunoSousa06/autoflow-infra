@@ -1,0 +1,29 @@
+global:
+  lowDataMode: true
+newrelic-infrastructure:
+  enabled: true
+nri-kube-events:
+  enabled: true
+newrelic-logging:
+  enabled: true
+  lowDataMode: true
+kube-state-metrics:
+  enabled: true
+nri-metadata-injection:
+  enabled: false
+nri-prometheus:
+  enabled: false
+newrelic-prometheus-agent:
+  enabled: false
+nr-ebpf-agent:
+  enabled: false
+k8s-agents-operator:
+  enabled: false
+newrelic-infra-operator:
+  enabled: false
+newrelic-k8s-metrics-adapter:
+  enabled: false
+newrelic-pixie:
+  enabled: false
+pixie-chart:
+  enabled: false
