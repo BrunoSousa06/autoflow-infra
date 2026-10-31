@@ -127,12 +127,12 @@ class GitHubEnvironmentValidationTests(unittest.TestCase):
             "api-gateway.yml": {
                 "plan": (
                     ("AWS_EXPECTED_ACCOUNT_ID", "AWS_REGION", "AWS_TERRAFORM_STATE_BUCKET", "AWS_TF_STATE_KEY_GATEWAY", "AWS_TF_STATE_KEY_INFRA", "AWS_TF_STATE_KEY_NEWRELIC", "API_GATEWAY_CORS_ORIGINS", "TERRAFORM_APPLY_APPROVAL_CONFIGURED"),
-                    ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"),
+                    ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE"),
                     ("AWS_TF_STATE_KEY_GATEWAY", "AWS_TF_STATE_KEY_INFRA", "AWS_TF_STATE_KEY_NEWRELIC"),
                 ),
                 "apply": (
                     ("AWS_EXPECTED_ACCOUNT_ID", "AWS_REGION", "AWS_TERRAFORM_STATE_BUCKET", "AWS_TF_STATE_KEY_GATEWAY", "AWS_TF_STATE_KEY_INFRA", "AWS_TF_STATE_KEY_NEWRELIC", "API_GATEWAY_CORS_ORIGINS", "TERRAFORM_APPLY_APPROVAL_CONFIGURED"),
-                    ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"),
+                    ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE"),
                     ("AWS_TF_STATE_KEY_GATEWAY", "AWS_TF_STATE_KEY_INFRA", "AWS_TF_STATE_KEY_NEWRELIC"),
                 ),
             },
@@ -149,7 +149,7 @@ class GitHubEnvironmentValidationTests(unittest.TestCase):
                     for name in secrets:
                         self.assertRegex(job, rf"(?m)^\s+{name}: \$\{{\{{ secrets\.{name} \}}\}}$")
                     self.assertIn("scripts/validate_github_environment.py", job)
-                    self.assertIn("--approval-gate", job)
+                    self.assertEqual("--approval-gate" in job, job_name != "plan")
                     for name in state_keys:
                         self.assertIn(f"--state-key {name}", job)
                     self.assertIn("aws-actions/configure-aws-credentials@v4", job)

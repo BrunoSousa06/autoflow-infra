@@ -385,10 +385,10 @@ class NewRelicPipelineGuardTests(unittest.TestCase):
         self.assertIn("--state-key AWS_TF_STATE_KEY_INFRA", validation)
         self.assertIn("AWS_EXPECTED_ACCOUNT_ID: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}", job_env)
         self.assertIn('[[ "$TF_VAR_newrelic_region" == US || "$TF_VAR_newrelic_region" == EU ]]', validation)
-        self.assertIn("--approval-gate", validation)
+        self.assertNotIn("--approval-gate", validation)
         self.assertLess(plan.index("Validar configuração antes de acessar AWS"), credentials_position)
 
-    def test_production_push_waits_for_explicit_state_bootstrap_then_runs_continuous_apply(self):
+    def test_manual_apply_requires_explicit_authorization_and_independent_environment_gate(self):
         from pathlib import Path
 
         workflow = Path(__file__).parents[1] / ".github/workflows/newrelic.yml"
@@ -400,8 +400,8 @@ class NewRelicPipelineGuardTests(unittest.TestCase):
         self.assertIn("initialized: ${{ steps.newrelic_state.outputs.initialized }}", plan)
         self.assertIn('echo "initialized=true" >> "$GITHUB_OUTPUT"', plan)
         self.assertIn('echo "initialized=false" >> "$GITHUB_OUTPUT"', plan)
-        self.assertIn("github.event_name == 'push' && needs.plan.outputs.initialized == 'true'", apply)
-        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.apply", apply)
+        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.apply == true", apply)
+        self.assertNotIn("github.event_name == 'push'", apply)
         self.assertLess(apply.index("Validar configuração e gate de aprovação"), apply.index("aws-actions/configure-aws-credentials@v4"))
         self.assertIn('aws s3api head-bucket --bucket "$TF_STATE_BUCKET" --expected-bucket-owner "$AWS_EXPECTED_ACCOUNT_ID"', plan)
         self.assertIn('aws eks describe-cluster --name "$EKS_CLUSTER_NAME"', plan)

@@ -10,17 +10,16 @@ APP = Path(os.environ.get("AUTOFLOW_REPO", str(ROOT.parent / "autoflow")))
 
 
 class GatewayRoutesTest(unittest.TestCase):
-    def test_plan_maps_both_branches_and_production_apply_requires_bootstrap_and_environment_approval(self):
+    def test_manual_plan_maps_both_branches_and_apply_requires_explicit_authorization(self):
         workflow = (ROOT / ".github/workflows/api-gateway.yml").read_text(encoding="utf-8")
         plan, apply = workflow.split("  plan:", 1)[1].split("  apply:", 1)[0], workflow.split("\n  apply:\n", 1)[1]
-        self.assertIn("(github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')", plan)
+        self.assertIn("(github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'workflow_dispatch'", plan)
         self.assertNotIn("refs/heads/feature/", plan)
         self.assertIn("environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}", plan)
         self.assertIn("github.ref != 'refs/heads/main' || github.ref_protected", plan)
         self.assertIn("TF_VAR_environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}", plan)
         self.assertIn("TF_VAR_lambda_function_name: autoflow-cpf-validator-${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}", plan)
-        self.assertIn("github.ref == 'refs/heads/develop' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.apply))", apply)
-        self.assertIn("github.ref == 'refs/heads/main' && ((github.event_name == 'push' && needs.plan.outputs.initialized == 'true') || (github.event_name == 'workflow_dispatch' && inputs.apply))", apply)
+        self.assertIn("(github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'workflow_dispatch' && inputs.apply == true", apply)
         self.assertIn("environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}", apply)
         self.assertIn("github.ref != 'refs/heads/main' || github.ref_protected", apply)
         self.assertIn("--approval-gate", apply)
@@ -51,8 +50,10 @@ class GatewayRoutesTest(unittest.TestCase):
         apply = workflow.split("\n  apply:\n", 1)[1]
 
         self.assertIn("terraform init -input=false -lockfile=readonly", plan)
-        self.assertIn("sha256sum gateway.tfplan .terraform.lock.hcl gateway.tfplan.commit gateway.tfplan.metadata.json gateway-deployment-config.sha256 > gateway.tfplan.sha256", plan)
-        self.assertIn('"$GITHUB_REF" == refs/heads/develop || "$GITHUB_REF" == refs/heads/main', plan)
+        self.assertIn("sha256sum gateway.tfplan.gpg .terraform.lock.hcl gateway.tfplan.commit gateway.tfplan.metadata.json gateway-deployment-config.sha256 > gateway.tfplan.sha256", plan)
+        self.assertIn("gateway.tfplan.gpg", plan)
+        self.assertIn("--decrypt --output gateway.tfplan gateway.tfplan.gpg", apply)
+        self.assertIn("github.event_name == 'workflow_dispatch'", plan)
         self.assertIn("sha256sum --check gateway.tfplan.sha256", apply)
 
     def test_allowlist_corresponde_aos_controllers(self):

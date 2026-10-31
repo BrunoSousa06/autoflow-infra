@@ -1,28 +1,12 @@
 name: New Relic Pipeline
 
 on:
-  pull_request:
-    branches: [develop, main]
-    paths:
-      - infra/newrelic/**
-      - scripts/newrelic*
-      - scripts/test_newrelic*
-      - scripts/test_terraform_backend_config.py
-      - scripts/validate_github_environment.py
-      - scripts/test_github_environment_guards.py
-      - scripts/eks_endpoint_access.py
-      - scripts/test_eks_endpoint_access.py
-      - scripts/review_eks_plan.py
-      - .github/workflows/newrelic.yml
-  push:
-    branches: [develop, main, 'feature/**']
-    paths-ignore:
-      - .github/workflows/newrelic.yml
   workflow_dispatch:
     inputs:
       apply:
         description: Aplicar o plan de New Relic aprovado neste run
         type: boolean
+        required: true
         default: false
       approve_reconciliation:
         description: Aprovar import declarativo ou plano de recuperação de ownership New Relic divergente
@@ -45,6 +29,7 @@ concurrency:
 
 jobs:
   validate:
+    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,12 +40,13 @@ jobs:
           terraform_wrapper: false
       - run: python -m unittest discover -s scripts -p "test_terraform_backend_config.py" -v
       - run: python -m unittest discover -s scripts -p "test_newrelic_*.py" -v
+      - run: python -m unittest discover -s scripts -p "test_ci_cd_workflow_matrix.py" -v
       - run: terraform fmt -check -recursive infra/newrelic
       - run: terraform -chdir=infra/newrelic init -backend=false -input=false -lockfile=readonly
       - run: terraform -chdir=infra/newrelic validate
 
   plan:
-    if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref != 'refs/heads/main' || github.ref_protected)
+    if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'workflow_dispatch' && (github.ref != 'refs/heads/main' || github.ref_protected)
     needs: validate
     runs-on: ubuntu-latest
     outputs:
@@ -123,8 +109,7 @@ jobs:
             --secret TERRAFORM_PLAN_ENCRYPTION_PASSPHRASE \
             --secret NEW_RELIC_API_KEY \
             --state-key AWS_TF_STATE_KEY_INFRA \
-            --state-key AWS_TF_STATE_KEY_NEWRELIC \
-            --approval-gate
+            --state-key AWS_TF_STATE_KEY_NEWRELIC
           python scripts/newrelic_pipeline_guard.py validate
           [[ "$TF_VAR_newrelic_region" == US || "$TF_VAR_newrelic_region" == EU ]]
           test "$TF_STATE_KEY" != "$AWS_TF_STATE_KEY_INFRA"
@@ -285,7 +270,7 @@ jobs:
           rm -f "$RUNNER_TEMP/legacy-state.json" "$RUNNER_TEMP/newrelic-state.json" "$RUNNER_TEMP/newrelic-account-presence" "$RUNNER_TEMP/newrelic-account-inventory.json" "$RUNNER_TEMP/newrelic-reconciliation-summary.json" "$RUNNER_TEMP/helm-presence" "$RUNNER_TEMP/helm-inventory.json" "$RUNNER_TEMP/newrelic-head-error" infra/newrelic/newrelic-reconciliation.auto.tf infra/newrelic/newrelic-reconciliation.sha256
 
   apply:
-    if: ((github.ref == 'refs/heads/develop' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.apply))) || (github.ref == 'refs/heads/main' && ((github.event_name == 'push' && needs.plan.outputs.initialized == 'true') || (github.event_name == 'workflow_dispatch' && inputs.apply)))) && (github.ref != 'refs/heads/main' || github.ref_protected)
+    if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'workflow_dispatch' && inputs.apply == true && (github.ref != 'refs/heads/main' || github.ref_protected)
     needs: plan
     runs-on: ubuntu-latest
     environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}

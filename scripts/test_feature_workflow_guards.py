@@ -48,7 +48,11 @@ class FeatureWorkflowGuardTests(unittest.TestCase):
         plan = workflow.split("  plan:", 1)[1].split("  apply:", 1)[0]
         apply = workflow.split("\n  apply:\n", 1)[1]
 
-        self.assertIn("branches: [develop, main, 'feature/**']", workflow)
+        ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertIn("branches: [develop, main, 'feature/**']", ci)
+        self.assertIn("on:\n  workflow_dispatch:", workflow)
+        self.assertNotIn("  push:", workflow.split("permissions:", 1)[0])
+        self.assertNotIn("  pull_request:", workflow.split("permissions:", 1)[0])
         self.assertNotIn("refs/heads/feature/", plan)
         self.assertIn("needs: validate", plan)
         self.assertIn("environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}", plan)
@@ -56,7 +60,7 @@ class FeatureWorkflowGuardTests(unittest.TestCase):
         self.assertIn("EKS_CLUSTER_NAME: eks-${{ github.ref == 'refs/heads/main' && 'autoflow-production' || 'autoflow' }}", plan)
         self.assertIn("EKS_LEASE_KEY: ci/${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}/eks-endpoint-lease.json", plan)
         self.assertNotIn("NEWRELIC_DEACTIVATION_APPROVED", plan)
-        self.assertIn("(((github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'push') || ((github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'workflow_dispatch' && inputs.apply && inputs.approve_state_bucket_creation != true))", apply)
+        self.assertIn("(github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'workflow_dispatch' && inputs.apply == true && inputs.approve_state_bucket_creation != true", apply)
         self.assertNotIn("refs/heads/feature/", apply)
         self.assertIn("needs: plan", apply)
         self.assertIn("github.event_name == 'workflow_dispatch' && inputs.allow_destructive", plan)
@@ -66,7 +70,7 @@ class FeatureWorkflowGuardTests(unittest.TestCase):
         self.assertIn("--approval-gate", apply)
         self.assertIn("TERRAFORM_APPLY_APPROVAL_CONFIGURED: ${{ vars.TERRAFORM_APPLY_APPROVAL_CONFIGURED }}", apply)
         self.assertLess(plan.index("Validar configuração obrigatória antes do acesso AWS"), plan.index("aws-actions/configure-aws-credentials@v4"))
-        self.assertIn("--approval-gate", plan)
+        self.assertNotIn("--approval-gate", plan)
         self.assertLess(apply.index("Validar configuração obrigatória antes do Apply"), apply.index("aws-actions/configure-aws-credentials@v4"))
         self.assertIn("vars.AWS_EXPECTED_ACCOUNT_ID", plan)
         self.assertIn("--state-key AWS_TF_STATE_KEY_INFRA", plan)
@@ -79,15 +83,16 @@ class FeatureWorkflowGuardTests(unittest.TestCase):
         plan = workflow.split("  plan:", 1)[1].split("  apply:", 1)[0]
         apply = workflow.split("\n  apply:\n", 1)[1]
 
-        self.assertIn("branches: [develop, main, 'feature/**']", workflow)
+        ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertIn("branches: [develop, main, 'feature/**']", ci)
+        self.assertIn("on:\n  workflow_dispatch:", workflow)
         self.assertNotIn("refs/heads/feature/", plan)
         self.assertIn("needs: validate", plan)
         self.assertIn("environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}", plan)
         self.assertNotIn("Exigir Required reviewers no environment para feature Plan", plan)
-        self.assertIn("github.ref == 'refs/heads/develop' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.apply))", apply)
-        self.assertIn("github.ref == 'refs/heads/main' && ((github.event_name == 'push' && needs.plan.outputs.initialized == 'true') || (github.event_name == 'workflow_dispatch' && inputs.apply))", apply)
+        self.assertIn("(github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'workflow_dispatch' && inputs.apply == true", apply)
         self.assertNotIn("refs/heads/feature/", apply)
-        self.assertIn("(github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')", plan)
+        self.assertIn("(github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'workflow_dispatch'", plan)
         self.assertIn("--approval-gate", apply)
         self.assertIn("environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}", apply)
         self.assertIn("--state-key AWS_TF_STATE_KEY_GATEWAY", plan)
@@ -97,9 +102,10 @@ class FeatureWorkflowGuardTests(unittest.TestCase):
         plan = workflow.split("  plan:", 1)[1].split("  apply:", 1)[0]
         apply = workflow.split("\n  apply:\n", 1)[1]
 
-        self.assertIn("pull_request:", workflow)
-        self.assertIn("branches: [develop, main, 'feature/**']", workflow)
-        self.assertIn("(github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')", plan)
+        ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertIn("pull_request:", ci)
+        self.assertIn("branches: [develop, main, 'feature/**']", ci)
+        self.assertIn("(github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'workflow_dispatch'", plan)
         self.assertNotIn("refs/heads/feature/", plan)
         self.assertNotIn("github.event_name == 'pull_request'", plan)
         self.assertNotIn("refs/heads/feature/", apply)
