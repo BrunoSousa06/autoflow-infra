@@ -100,6 +100,15 @@ class FeatureWorkflowGuardTests(unittest.TestCase):
         self.assertIn("environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}", apply)
         self.assertIn("--state-key AWS_TF_STATE_KEY_GATEWAY", plan)
 
+    def test_gateway_allowed_account_ids_match_between_plan_and_apply(self):
+        workflow = (ROOT / ".github/workflows/api-gateway.yml").read_text(encoding="utf-8")
+        plan = workflow.split("\n  plan:\n", 1)[1].split("\n  apply:\n", 1)[0]
+        apply = workflow.split("\n  apply:\n", 1)[1]
+        expected = "TF_VAR_aws_allowed_account_ids: '[\"${{ vars.AWS_EXPECTED_ACCOUNT_ID }}\"]'"
+
+        self.assertIn(expected, plan)
+        self.assertIn(expected, apply)
+
     def test_newrelic_pr_and_feature_events_validate_without_plan_or_apply(self):
         workflow = (ROOT / ".github/workflows/newrelic.yml").read_text(encoding="utf-8")
         plan = workflow.split("  plan:", 1)[1].split("  apply:", 1)[0]
