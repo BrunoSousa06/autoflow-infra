@@ -1,8 +1,9 @@
 # Variables e secrets
 
 `develop` seleciona `homolog`; `main` seleciona `production`. Os nomes dos recursos EKS são derivados do ambiente. Os
-workflows recebem `push`, mas o Plan automático exige `AUTO_CD_ENABLED=true` no Environment e sucesso da CI para o mesmo
-SHA. Apply requer `workflow_dispatch`, `apply=true`, aprovação do Environment e o guard
+workflows recebem `push`, mas o Plan automático exige que a Repository Variable correspondente (`AUTO_CD_ENABLED_HOMOLOG`
+ou `AUTO_CD_ENABLED_PRODUCTION`) tenha o valor literal `true` e que a CI do mesmo SHA tenha sucesso. Apply requer
+`workflow_dispatch`, `apply=true`, aprovação do Environment e o guard
 `TERRAFORM_APPLY_APPROVAL_CONFIGURED=true`. O primeiro provisionamento de API Gateway e New Relic depende de EKS, RDS,
 Lambda e aplicação prontos conforme o root. CI de PR não acessa AWS.
 
@@ -33,7 +34,7 @@ adicional e não substitui Required reviewers nem a aprovação nativa do Enviro
 | `AWS_TF_STATE_KEY_NEWRELIC` | Key exclusiva do State New Relic | Environment Variable em `homolog` e `production` | Plan/Apply New Relic | Prefixo do Environment e sufixo definido externamente | `newrelic.yml`; obrigatória, sem default, prefixada pelo ambiente e distinta das demais keys. |
 | `AWS_TF_STATE_KEY_GATEWAY` | Key exclusiva do State API Gateway | Environment Variable em `homolog` e `production` | CD | Prefixo do Environment e sufixo definido externamente | `api-gateway.yml`; obrigatória, sem default, e prefixada pelo ambiente selecionado. |
 | `API_GATEWAY_CORS_ORIGINS` | Lista JSON de origens HTTPS CORS | Environment Variable em cada Environment | CD | `[]` | `api-gateway.yml`; obrigatória; deve conter um array JSON válido. |
-| `AUTO_CD_ENABLED` | Habilita o Plan automático após CI | Environment Variable independente em `homolog` e `production` | CD automático opt-in | `true` | Somente o valor literal `true` habilita o caminho automático; não autoriza Apply. |
+| `AUTO_CD_ENABLED_HOMOLOG`, `AUTO_CD_ENABLED_PRODUCTION` | Habilitam o Plan automático após CI por branch | GitHub Repository Variables | CD automático opt-in | `true` | `develop` usa somente `AUTO_CD_ENABLED_HOMOLOG`; `main` usa somente `AUTO_CD_ENABLED_PRODUCTION`. Ausente ou diferente de `true` mantém o CD desabilitado; não autoriza Apply. |
 | `AUTOFLOW_REPOSITORY` | Repositório de contrato verificado pelo CI | GitHub Repository Variable | CI, opcional | `organizacao/autoflow` | `api-gateway.yml`; default `${{ format('{0}/autoflow', github.repository_owner) }}`. |
 | `AUTOFLOW_CONTRACT_REF` | Ref de contrato | GitHub Repository Variable | CI, opcional | `develop` | `api-gateway.yml`; default `develop`. |
 | `TERRAFORM_APPLY_APPROVAL_CONFIGURED` | Guard adicional para ações protegidas | Environment Variable; definir `true` somente depois de configurar Required reviewers e branch policy no mesmo Environment | Plan/Apply e bootstrap | `true` | Ausente ou diferente de `true` bloqueia Apply. É um gate independente; não substitui a aprovação nativa do Environment. |

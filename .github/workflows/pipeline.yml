@@ -57,6 +57,8 @@ jobs:
           GITHUB_REF_PROTECTED: ${{ github.ref_protected }}
           CI_WORKFLOW_NAME: AutoFlow infra CI
           EXPECTED_REPOSITORY_ID: ${{ github.repository_id }}
+          AUTO_CD_ENABLED_HOMOLOG: ${{ vars.AUTO_CD_ENABLED_HOMOLOG }}
+          AUTO_CD_ENABLED_PRODUCTION: ${{ vars.AUTO_CD_ENABLED_PRODUCTION }}
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: python scripts/validate_cd_trigger.py

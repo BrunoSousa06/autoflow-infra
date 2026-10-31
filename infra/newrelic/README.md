@@ -39,7 +39,8 @@ O inventário remoto pagina dashboards via NerdGraph e alertas, condições NRQL
 
 O workflow `.github/workflows/ci.yml` valida o root em Pull Requests para `develop`/`main` e pushes para `develop`, `main`
 e `feature/**`, sem acesso AWS. `New Relic Pipeline` recebe `push` em `develop`/`main` e `workflow_dispatch`; o caminho
-automático exige `AUTO_CD_ENABLED=true` e CI bem-sucedida para o mesmo SHA e executa somente Plan. Apply exige dispatch
+automático exige `AUTO_CD_ENABLED_HOMOLOG=true` em `develop` ou `AUTO_CD_ENABLED_PRODUCTION=true` em `main`, além de CI
+bem-sucedida para o mesmo SHA, e executa somente Plan. Apply exige dispatch
 com `apply=true` e `TERRAFORM_APPLY_APPROVAL_CONFIGURED=true`; o job usa o Environment selecionado. Configure Required
 reviewers e restrições de branch para proteger o deployment. O Plan é criptografado e publicado em artifact vinculado ao
 commit. `approve_reconciliation` gera imports declarativos incluídos no Plan; scripts não alteram State. Exclusões e
