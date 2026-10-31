@@ -48,8 +48,9 @@ forwarding paralelo no agente.
 
 ### Validação pós-aplicação no New Relic
 
-Após o Apply autorizado do root New Relic e a próxima publicação autorizada da aplicação (não executados nesta investigação),
-aguarde alguns minutos e valide primeiro a ingestão sem retornar conteúdo de mensagens:
+Após o Apply autorizado do root New Relic e o rollout saudável do Fluent Bit (não executados nesta investigação), aguarde
+alguns minutos e valide primeiro a ingestão sem retornar conteúdo de mensagens. Não é necessário republicar o backend se os
+pods atuais já estiverem emitindo logs no stdout:
 
 ```nrql
 SELECT count(*) FROM Log SINCE 1 hour ago
