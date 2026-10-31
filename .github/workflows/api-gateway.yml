@@ -250,6 +250,7 @@ jobs:
       TF_VAR_environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
       TF_VAR_lambda_function_name: autoflow-cpf-validator-${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
       TF_VAR_expected_account_id: ${{ vars.AWS_EXPECTED_ACCOUNT_ID }}
+      TF_VAR_aws_allowed_account_ids: '["${{ vars.AWS_EXPECTED_ACCOUNT_ID }}"]'
       TF_VAR_terraform_state_bucket: ${{ vars.AWS_TERRAFORM_STATE_BUCKET }}
       TF_VAR_infra_state_key: ${{ vars.AWS_TF_STATE_KEY_INFRA }}
       TF_VAR_cors_origins: ${{ vars.API_GATEWAY_CORS_ORIGINS }}
