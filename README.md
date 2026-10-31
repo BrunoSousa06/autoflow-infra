@@ -37,8 +37,9 @@ e [runbooks](docs/api-gateway/runbook.md).
 - `ci.yml` valida os roots, testes e guardrails em Pull Requests para `develop`/`main` e pushes para essas branches e
   `feature/**`. A CI não usa credenciais AWS nem executa Plan/Apply.
 - Os workflows `Pipeline`, `Migração HTTP API` e `New Relic Pipeline` também recebem `push` em `develop`/`main`.
-- O gate valida a CI do mesmo repositório, branch e SHA. `AUTO_CD_ENABLED=true` no Environment selecionado habilita o
-  caminho automático, que executa Plan, não Apply.
+- O gate valida a CI do mesmo repositório, branch e SHA. As Repository Variables `AUTO_CD_ENABLED_HOMOLOG` e
+  `AUTO_CD_ENABLED_PRODUCTION` habilitam o caminho automático por branch (`develop` e `main`, respectivamente), que
+  executa Plan, não Apply. Somente o valor literal `true` habilita o Plan.
 - Apply requer `workflow_dispatch` com `apply=true` e `TERRAFORM_APPLY_APPROVAL_CONFIGURED=true`; os jobs usam o
   Environment selecionado. Configure Required reviewers e restrições de branch nos Environments; `main` exige proteção
   de branch.
