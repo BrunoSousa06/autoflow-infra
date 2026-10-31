@@ -31,3 +31,5 @@ CI ocorre em PRs e pushes conforme os workflows. Para `Pipeline` de VPC/EKS, pri
 ## Escopo e limites
 
 Esta RFC registra decisões e configuração de arquitetura. Os parâmetros de conta, região, state e credenciais são fornecidos à pipeline pelo ambiente de provisionamento. Procedimentos estão no [`runbook.md`](runbook.md).
+
+Os artefatos consultados não registram comparação formal entre provedores de nuvem nem os decisores da escolha original. Esta RFC descreve a arquitetura AWS versionada, sem atribuir ao projeto uma análise histórica que não está documentada.
