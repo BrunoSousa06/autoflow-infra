@@ -313,7 +313,8 @@ class EndpointAccessTests(unittest.TestCase):
         content = workflow.read_text(encoding="utf-8")
         plan = content.split("  plan:", 1)[1].split("  apply:", 1)[0]
         apply = content.split("\n  apply:\n", 1)[1]
-        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.approve_state_bucket_creation != true", plan)
+        self.assertIn("inputs.approve_state_bucket_creation != true", plan)
+        self.assertIn("needs.gate.outputs.auto_cd_enabled == 'true'", plan)
         self.assertIn("default: false", content.split("approve_state_bucket_creation:", 1)[1].split("permissions:", 1)[0])
         self.assertIn("default: false", content.split("approve_eks_state_reconciliation:", 1)[1].split("allow_destructive:", 1)[0])
         self.assertIn("description: Autorizar exclusões/substituições após revisar o plan", content)
@@ -335,7 +336,8 @@ class EndpointAccessTests(unittest.TestCase):
         self.assertIn("if: steps.eks_preflight.outputs.exists == 'true'", apply_authorize)
         self.assertIn("steps.authorize_eks.outcome != 'skipped'", plan)
         self.assertIn("steps.authorize_eks.outcome != 'skipped'", apply)
-        self.assertNotIn("github.event_name == 'push'", plan + apply)
+        self.assertIn("needs.gate.outputs.auto_cd_enabled == 'true'", plan)
+        self.assertNotIn("github.event_name == 'push'", apply)
         self.assertIn("github.event_name == 'workflow_dispatch' && inputs.apply == true", apply)
         self.assertIn("inputs.approve_state_bucket_creation != true", apply)
         self.assertNotIn("--approval-gate", plan)
@@ -346,7 +348,7 @@ class EndpointAccessTests(unittest.TestCase):
         self.assertNotIn("TF_VAR_enable_newrelic", plan)
         self.assertIn("check-legacy-plan", plan)
         self.assertIn("check-legacy-plan", apply)
-        self.assertIn("needs: plan", apply)
+        self.assertIn("needs: [gate, plan]", apply)
         self.assertIn("infra-tfplan-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}", apply)
         download_position = apply.index("- uses: actions/download-artifact@v4")
         integrity_position = apply.index("- name: Validar fingerprint, run, commit e integridade antes de qualquer acesso AWS")
@@ -369,7 +371,7 @@ class EndpointAccessTests(unittest.TestCase):
         self.assertLess(newrelic_guard_position, eks_guard_position)
         self.assertLess(eks_guard_position, apply_position)
         integrity_step = apply.split("- name: Validar fingerprint, run, commit e integridade antes de qualquer acesso AWS", 1)[1].split("- name:", 1)[0]
-        self.assertIn('test "$(cat infra.tfplan.commit)" = "$GITHUB_SHA"', integrity_step)
+        self.assertIn('test "$(cat infra.tfplan.commit)" = "$DEPLOY_SHA"', integrity_step)
         self.assertIn("sha256sum --check infra.tfplan.sha256", integrity_step)
         self.assertIn("terraform_deployment_fingerprint.py vpc-eks verify", integrity_step)
         self.assertNotIn("newrelic", integrity_step)

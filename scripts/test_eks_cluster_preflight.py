@@ -64,7 +64,7 @@ class EksClusterPreflightTests(unittest.TestCase):
         self.assertIn("helm_release", (root / "newrelic/kubernetes.tf").read_text(encoding="utf-8"))
         self.assertIn("verify-secret", nr_workflow)
         self.assertIn("check-legacy-plan", workflow)
-        self.assertIn("needs: plan", apply)
+        self.assertIn("needs: [gate, plan]", apply)
         self.assertIn("environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}", apply)
         self.assertIn("scripts/validate_github_environment.py", apply)
         self.assertIn("--approval-gate", apply)

@@ -13,7 +13,7 @@ class GatewayRoutesTest(unittest.TestCase):
     def test_manual_plan_maps_both_branches_and_apply_requires_explicit_authorization(self):
         workflow = (ROOT / ".github/workflows/api-gateway.yml").read_text(encoding="utf-8")
         plan, apply = workflow.split("  plan:", 1)[1].split("  apply:", 1)[0], workflow.split("\n  apply:\n", 1)[1]
-        self.assertIn("(github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.event_name == 'workflow_dispatch'", plan)
+        self.assertIn("(github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && needs.gate.outputs.auto_cd_enabled == 'true'))", plan)
         self.assertNotIn("refs/heads/feature/", plan)
         self.assertIn("environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}", plan)
         self.assertIn("github.ref != 'refs/heads/main' || github.ref_protected", plan)

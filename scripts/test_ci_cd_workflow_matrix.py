@@ -20,34 +20,46 @@ class CiCdWorkflowMatrixTests(unittest.TestCase):
         self.assertIn("branches: [develop, main, 'feature/**']", triggers)
         self.assertIn("branches: [develop, main]", triggers)
         self.assertNotIn("workflow_dispatch:", triggers)
+        self.assertIn('test_validate_cd_trigger.py', ci)
         self.assertNotRegex(ci, r"(?im)^\s*run:.*\bterraform\s+(?:plan|apply|destroy)\b")
         self.assertNotIn("aws-actions/configure-aws-credentials", ci)
         self.assertNotIn("docker/build-push-action", ci)
         self.assertNotIn("kubectl rollout", ci)
 
-    def test_each_infrastructure_component_has_dispatch_only_cd_and_guarded_apply(self):
+    def test_each_infrastructure_component_has_opt_in_push_cd_and_guarded_apply(self):
         for filename in ("pipeline.yml", "api-gateway.yml", "newrelic.yml"):
             with self.subTest(workflow=filename):
                 content = (WORKFLOWS / filename).read_text(encoding="utf-8")
                 triggers = content.split("permissions:", 1)[0]
+                gate = section(content, "gate", "validate")
                 plan = section(content, "plan", "apply")
                 apply = section(content, "apply")
                 self.assertIn("on:\n  workflow_dispatch:", triggers)
-                self.assertNotIn("  push:", triggers)
+                self.assertIn("  push:\n    branches: [develop, main]", triggers)
                 self.assertNotIn("  pull_request:", triggers)
                 self.assertIn("github.event_name == 'workflow_dispatch'", plan)
-                self.assertIn("refs/heads/develop", plan)
-                self.assertIn("refs/heads/main", plan)
+                self.assertIn("github.event_name == 'push'", plan)
+                self.assertIn("needs.gate.outputs.auto_cd_enabled == 'true'", plan)
+                self.assertIn("github.ref == 'refs/heads/develop'", plan)
+                self.assertIn("github.ref == 'refs/heads/main'", plan)
                 self.assertIn("github.ref_protected", plan)
+                self.assertIn("needs: [gate, validate]", plan)
+                self.assertIn("python scripts/validate_cd_trigger.py", gate)
+                self.assertIn("id: validate", gate)
+                self.assertNotIn("terraform plan", gate)
+                self.assertNotIn("configure-aws-credentials", gate)
+                trigger_script = (ROOT / "scripts" / "validate_cd_trigger.py").read_text(encoding="utf-8")
+                self.assertIn('"AUTO_CD_ENABLED"', trigger_script)
+                self.assertIn("environments/{environment}/variables", trigger_script)
                 self.assertIn("github.event_name == 'workflow_dispatch'", apply)
                 self.assertIn("inputs.apply == true", apply)
-                self.assertIn("needs: plan", apply)
+                self.assertIn("needs: [gate, plan]", apply)
                 self.assertIn("TERRAFORM_APPLY_APPROVAL_CONFIGURED", apply)
                 self.assertIn("--approval-gate", apply)
                 self.assertIn("environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}", plan)
                 self.assertIn("environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}", apply)
                 self.assertIn("terraform apply -input=false", apply)
-                self.assertNotIn("github.event_name == 'push'", plan + apply)
+                self.assertNotIn("github.event_name == 'push'", apply)
 
     def test_plan_approval_does_not_depend_on_the_apply_flag(self):
         for filename in ("pipeline.yml", "api-gateway.yml", "newrelic.yml"):
@@ -65,6 +77,7 @@ class CiCdWorkflowMatrixTests(unittest.TestCase):
         self.assertIn("--approve-create", bootstrap)
         self.assertIn("--approval-gate", bootstrap)
         self.assertNotIn("needs:", bootstrap)
+        self.assertNotIn("needs: plan", bootstrap)
         self.assertIn("inputs.approve_state_bucket_creation != true", plan)
         self.assertNotIn("--approve-create", plan)
 
