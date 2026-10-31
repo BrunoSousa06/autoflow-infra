@@ -30,8 +30,8 @@ class ProviderIntegrityWorkflowTests(unittest.TestCase):
         apply_checkout = self.apply.split("- uses: actions/checkout@v4", 1)[1].split("- name:", 1)[0]
         upload = self.plan.split("- name: Publicar artifact criptografado da execução", 1)[1]
 
-        self.assertIn("ref: ${{ github.sha }}", plan_checkout)
-        self.assertIn("ref: ${{ github.sha }}", apply_checkout)
+        self.assertIn("ref: ${{ needs.gate.outputs.sha }}", plan_checkout)
+        self.assertIn("ref: ${{ needs.gate.outputs.sha }}", apply_checkout)
         self.assertIn("infra/infra.tfplan.gpg", upload)
         self.assertNotIn("infra/.terraform", upload)
         self.assertNotIn("actions/cache", self.workflow)

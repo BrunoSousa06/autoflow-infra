@@ -31,6 +31,7 @@ jobs:
       - run: python -m unittest discover -s scripts -p "test_state_resource_guard.py" -v
       - run: python -m unittest discover -s scripts -p "test_review_eks_plan.py" -v
       - run: python -m unittest discover -s scripts -p "test_ci_cd_workflow_matrix.py" -v
+      - run: python -m unittest discover -s scripts -p "test_validate_cd_trigger.py" -v
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.16.5"
