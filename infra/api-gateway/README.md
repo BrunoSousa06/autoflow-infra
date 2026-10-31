@@ -28,4 +28,14 @@ O backend S3 é parcial e este root não cria o bucket. Configure bucket, regiã
 
 Para validar a configuração local sem AWS, execute `terraform init -backend=false -input=false`, `terraform validate` e `python -m unittest discover -s scripts -p "test_terraform_backend_config.py" -v` na raiz do repositório. Para um init remoto autorizado, use somente o bucket/key aprovados e a configuração externa de conta, mantendo os mesmos argumentos de criptografia e locking descritos no workflow.
 
+## Observabilidade declarada
+
+O root configura access logs JSON no CloudWatch com `requestId`, template de rota, status HTTP, latência e status de
+integração; não registra IP, query, body ou headers. O log group retém eventos por sete dias. Há alarmes CloudWatch para
+respostas 5xx e ausência de targets saudáveis no ALB. `alarm_actions` é vazio por padrão, portanto não declara destino de
+notificação; métricas detalhadas por rota também ficam desativadas por padrão e exigem habilitação externa.
+
+O dashboard opcional de API Gateway no New Relic recebe consultas NRQL por Environment. Esses arquivos declaram recursos,
+mas não comprovam que estejam habilitados, implantados ou emitindo dados.
+
 Quando aplicado, este root publica o endpoint pelo output `gateway_url`. Antes de qualquer Apply futuro, confirmar conta, state e escopo integral do plan; não aplicar planos de destruição sem aprovação específica.

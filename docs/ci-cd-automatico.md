@@ -17,3 +17,11 @@ O caminho automático não executa Apply. Apply continua disponível somente por
 - A configuração exige apenas uma Variable não sensível; não exige Secret novo nem ID de conta. Os CD jobs continuam reutilizando as configurações AWS, States, criptografia e gates já existentes em cada Environment.
 
 O gate automático apenas inicia os jobs de Plan após a CI aprovada. As proteções próprias do Environment continuam aplicáveis. Nenhuma implantação ou operação AWS é inferida como realizada por esta configuração local.
+
+## Estado verificado em 31/10/2026
+
+`AUTO_CD_ENABLED` estava ausente e `TERRAFORM_APPLY_APPROVAL_CONFIGURED=false` em `homolog` e `production`. Os últimos
+pushes de VPC/EKS, API Gateway e New Relic falharam no gate antes do Plan; o log de [Pipeline](https://github.com/autoflow-fiap/autoflow-infra/actions/runs/41160245014)
+registra falha ao consultar `AUTO_CD_ENABLED`. A [execução manual 41163573967](https://github.com/autoflow-fiap/autoflow-infra/actions/runs/41163573967)
+validou VPC/EKS e Plan, mas não executou Apply. Regrasets com PR/checks, Required reviewers e branch policies dos
+Environments estavam presentes na consulta somente-leitura ao GitHub.

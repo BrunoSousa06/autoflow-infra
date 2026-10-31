@@ -15,7 +15,7 @@ Adotar Amazon API Gateway HTTP API v2 como entrada pública única. `POST /auth/
 ## Alternativas consideradas
 
 - **Manter Kong:** não escolhido; manteria um gateway operado no cluster e uma camada adicional de operação. Não há avaliação quantitativa comparativa registrada.
-- **API Gateway com Lambda proxy em todas as rotas:** não escolhido; o desenho implantado mantém frontend e backend no EKS e os conecta pelo VPC Link/ALB.
+- **API Gateway com Lambda proxy em todas as rotas:** não escolhido; a configuração declarada mantém frontend e backend no EKS e os conecta pelo VPC Link/ALB.
 - **Function URL da Lambda:** não é usada. O login entra pela HTTP API, que invoca a Lambda por `AWS_PROXY`; a permissão `lambda:InvokeFunction` é limitada à rota de login.
 
 ## Consequências

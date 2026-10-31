@@ -2,6 +2,30 @@
 
 Este root gerencia exclusivamente `helm_release.newrelic_kubernetes`, dashboards, alert policy/conditions NRQL e Synthetic. Não cria nem importa VPC, EKS, node group, RDS ou API Gateway. O EKS é consultado por data sources AWS com o nome fornecido externamente; o Secret Kubernetes é apenas validado e referenciado pelo nome.
 
+## Recursos de observabilidade declarados
+
+- `ENABLE_NEWRELIC_KUBERNETES=true` habilita o chart `nri-bundle`, incluindo coleta Kubernetes e Fluent Bit para logs do
+  namespace configurado. A aplicação instala o agente APM Java e emite eventos de OS e falhas de integração.
+- `ENABLE_NEWRELIC_ACCOUNT_RESOURCES=true` declara dashboard privado e condições NRQL para OS criadas/dia, duração por
+  etapa, latência APM, CPU/memória, falhas de processamento e integrações. Synthetic exige URL e locations fornecidas em
+  conjunto; quando habilitado, o monitor é configurado para executar a cada cinco minutos.
+- O dashboard e as condições só são criados quando a flag de recursos de conta está ativa. Consultas opcionais controlam
+  widgets/alertas de disponibilidade, CPU e memória. O código não comprova que as flags estejam ativas ou que os recursos
+  estejam implantados.
+- O filtro dos widgets APM no dashboard usa `environment`, enquanto as condições APM usam `tags.environment`. A
+  compatibilidade desses atributos não foi verificada no New Relic. Este root também não declara destino/workflow de
+  notificação; no root API Gateway, `alarm_actions` é vazio por padrão.
+
+Na consulta somente-leitura ao GitHub em 31/10/2026, as flags `ENABLE_NEWRELIC_KUBERNETES` e
+`ENABLE_NEWRELIC_ACCOUNT_RESOURCES` estavam `true` em `homolog` e ausentes em `production`. Isso descreve a configuração
+dos Environments, não comprova Apply, ingestão ou recursos ativos. A variável `ENABLE_NEWRELIC_APM` da aplicação estava
+`true` nos dois Environments.
+
+Os eventos `AutoFlowOrderCreated`, `AutoFlowOrderStageCompleted`, `AutoFlowOrderProcessingFailure` e
+`AutoFlowIntegrationFailure` são emitidos pela aplicação e carregam o atributo `environment`. Logs JSON incluem
+`request.id` e, quando disponíveis, `trace.id`/`span.id`. Configuração versionada e testes não comprovam ingestão, abertura
+de incidentes, entrega de notificações ou execução de Synthetic.
+
 ## State e providers
 
 - Backend S3 independente: bucket e key exclusivos fornecidos por Variables do GitHub Environment selecionado. A key deve começar com `homolog/` ou `production/`; seu sufixo é definido externamente e não é fixado neste root.
@@ -19,6 +43,6 @@ O inventário remoto pagina dashboards via NerdGraph e alertas, condições NRQL
 
 ## Execução
 
-O workflow `.github/workflows/ci.yml` valida automaticamente New Relic em PRs para `develop`/`main` e pushes para `develop`, `main` e `feature/**`, sem acesso AWS. `New Relic Pipeline` é CD manual, aceita somente `workflow_dispatch` em `develop`/`main`, criptografa e publica artifact vinculado ao commit, e mapeia `develop` para `homolog` e `main` para `production`. Plan usa a aprovação nativa do Environment e pode executar com `TERRAFORM_APPLY_APPROVAL_CONFIGURED=false`; Apply exige `apply=true`, revisão independente no Environment e o gate `TERRAFORM_APPLY_APPROVAL_CONFIGURED=true`. Valores obrigatórios são validados antes do acesso AWS sem chamadas às APIs administrativas de Variables, Secrets ou reviewers; Required reviewers e branch policies devem ser auditados externamente antes de habilitar Apply. `approve_reconciliation` é falso por padrão e só pode ser habilitado por `workflow_dispatch`: cria import blocks temporários para objetos remotos AutoFlow sem ownership e prepara um Plan de refresh para objetos registrados no State mas ausentes do inventário. O Terraform Apply aprovado executa a importação/recovery conforme o Plan; scripts não alteram State. A reconciliação revalida conta, ambiente e fingerprint antes do Apply. Exclusões e substituições continuam sujeitas aos guards existentes; Plan destrutivo requer `allow_destructive=true`, reviewers e configuração de aprovação no GitHub.
+O workflow `.github/workflows/ci.yml` valida automaticamente New Relic em PRs para `develop`/`main` e pushes para `develop`, `main` e `feature/**`, sem acesso AWS. `New Relic Pipeline` recebe `push` para `develop`/`main` e `workflow_dispatch`. O caminho automático espera sucesso da CI para o mesmo SHA e só libera Plan quando `AUTO_CD_ENABLED=true` no Environment; a Variable estava ausente em `homolog` e `production` na consulta somente-leitura de 31/10/2026, então o caminho estava desabilitado. `develop` seleciona `homolog`; `main`, `production`. O caminho automático não executa Apply. Apply requer dispatch com `apply=true`, aprovação do Environment selecionado e `TERRAFORM_APPLY_APPROVAL_CONFIGURED=true`; essa Variable estava `false` nos dois Environments e bloqueava Apply. Regrasets de branch, Required reviewers e políticas `develop`/`main` estavam ativos na mesma consulta. O Plan é criptografado e publicado em artifact vinculado ao commit. `approve_reconciliation` só pode ser habilitado por dispatch e gera imports declarativos incluídos no Plan; scripts não alteram State. Exclusões e substituições continuam sujeitas aos guards existentes e à aprovação explícita.
 
 Antes do primeiro uso, confirmar conta, ambiente e ownership. A pipeline bloqueia State legado, ownership duplicado, identidade ambígua, respostas incompletas e inventário inconclusivo. Divergência exige `workflow_dispatch` com `approve_reconciliation=true` e revisão do Plan; imports são declarativos e incluídos no mesmo Plan aprovado. A reconciliação não executa `state rm`, `state mv`, importação fora do Terraform ou Apply automático.

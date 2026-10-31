@@ -182,7 +182,7 @@ O frontend chama `/auth/login` e as rotas de negócio no mesmo host. `cors_origi
 | VPC/EKS (`autoflow-infra/infra`) | VPC, EKS e node group | `AWS_TF_STATE_KEY_INFRA` | O workflow deste repositório exige o prefixo do Environment selecionado. |
 | Aplicação (`autoflow/infra`) | Deployments, Services, NodePorts e ConfigMaps | `AWS_TF_STATE_KEY` | O workflow do checkout consultado consome a Variable; a validação da matriz de seis roots é separada e não é disparada automaticamente por este repositório. |
 | RDS (`autoflow-db/infra`) | RDS PostgreSQL e rede do banco | `AWS_TF_STATE_KEY` | O workflow do checkout consultado consome a Variable; a validação da matriz de seis roots é separada e não é disparada automaticamente por este repositório. |
-| Lambda (`autoflow-lambda/infra`) | Função Lambda e configuração de execução; a invocação é integrada à HTTP API, sem Function URL no caminho declarado | `AWS_TF_STATE_KEY` | O workflow do checkout consultado também valida a key atual `lambda/terraform.tfstate`; confirmar a separação por Environment antes de promover esse root. |
+| Lambda (`autoflow-lambda/infra`) | Função Lambda e configuração de execução; a invocação é integrada à HTTP API, sem Function URL no caminho declarado | `AWS_TF_STATE_KEY` | O workflow lê a key do Environment selecionado, exige o prefixo do ambiente e valida a separação em relação às keys de VPC/EKS e RDS. O sufixo é externo. |
 | API Gateway (`autoflow-infra/infra/api-gateway`) | HTTP API, rotas, integração nativa Lambda, VPC Link, ALB, Target Groups e observabilidade | `AWS_TF_STATE_KEY_GATEWAY` | O workflow deste repositório exige o prefixo do Environment e distingue a key de VPC/EKS e New Relic. |
 | New Relic (`autoflow-infra/infra/newrelic`) | Release Helm, dashboards, alertas e Synthetic | `AWS_TF_STATE_KEY_NEWRELIC` | O workflow deste repositório exige o prefixo do Environment e distingue a key de VPC/EKS. |
 
@@ -190,43 +190,9 @@ Para cada Environment, a matriz lógica contém seis keys diferentes: cada key d
 
 Os states permanecem separados. Nenhum state deve ser editado diretamente ou compartilhado entre contas.
 
-## 4. Fluxo de bootstrap e implantação declarado nos workflows
+## 4. Provisionamento e operação
 
-```mermaid
-sequenceDiagram
-  actor Dev as Desenvolvedor
-  participant GH as GitHub Actions
-  participant Env as GitHub Environment selecionado
-  participant Contract as Validador local dos seis States
-  participant Boot as Job bootstrap_state_bucket
-  participant Plan as Jobs validate e plan
-  participant Apply as Job apply
-  participant AWS as Conta AWS do Environment
-  Dev->>Env: Configurar Variables, Secrets e Required reviewers
-  Dev->>Contract: Validar matriz externa de conta, bucket, região e seis keys
-  Contract-->>Dev: Contrato local válido; sem acesso AWS
-  Dev->>GH: Dispatch com approve_state_bucket_creation=true
-  GH->>Env: Aguardar aprovação nativa do Environment
-  Env->>Boot: Liberar somente o job de bootstrap
-  Boot->>AWS: Validar identidade STS e proprietário esperado
-  Boot->>AWS: Verificar bucket e controles de segurança
-  alt Bucket ausente
-    Boot->>AWS: Criar bucket e aplicar controles; verificar resultado
-  else Bucket existente e compatível
-    Boot->>AWS: Somente leitura; nenhum put/create
-  end
-  Note over GH,Plan: validate, Plan, Apply e Terraform init ficam ignorados neste dispatch
-  Dev->>GH: Novo dispatch com approve_state_bucket_creation=false
-  GH->>Plan: Executar CI e Plan protegido; apply=false permite revisão do artifact
-  Plan->>AWS: Revalidar conta, State e backend; gerar Plan criptografado/fingerprint
-  Dev->>GH: Dispatch posterior com apply=true, após revisar o Plan
-  GH->>Plan: Validar e gerar novo Plan no run de Apply
-  Plan->>AWS: Revalidar backend e criar artifact vinculado ao run/commit
-  GH->>Env: Job apply aguarda aprovação nativa
-  Env->>Apply: Liberar após checks de artifact, fingerprint, conta e state
-  Apply->>AWS: Aplicar somente o Plan vinculado à mesma execução
-```
-
-O diagrama descreve configuração versionada e fluxos declarados, não uma implantação confirmada. O Plan-only dispatch e o dispatch com `apply=true` são execuções distintas; o segundo gera um Plan novo no mesmo run e aplica esse artifact somente após o gate do Environment.
-
-Não aplicar plans de destruição sem revisão. A ordem e os comandos de provisionamento estão no [runbook](runbook.md).
+O bootstrap do bucket, a validação dos seis States, os gates de Plan/Apply e a ordem de implantação estão descritos no
+[runbook do API Gateway](runbook.md), no [runbook de primeiro provisionamento EKS](../eks-primeiro-provisionamento.md)
+e no [procedimento de bootstrap S3](../state-bucket-bootstrap.md). Esses documentos descrevem procedimentos e
+configuração versionada; não confirmam a execução de Apply nem o estado atual dos recursos AWS.
